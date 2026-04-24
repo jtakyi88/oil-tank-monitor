@@ -30,6 +30,10 @@ const IPAddress AP_IP(192, 168, 4, 1);
 const IPAddress AP_GATEWAY(192, 168, 4, 1);
 const IPAddress AP_SUBNET(255, 255, 255, 0);
 
+// ===== FACTORY RESET BUTTON =====
+const int RESET_BUTTON_PIN = 0;           // BOOT button (GPIO0)
+const unsigned long RESET_HOLD_MS = 5000; // Hold 5 seconds to factory reset
+
 // ===== SENSOR CONFIG =====
 const int SENSOR_PIN = 4;
 const unsigned long ALERT_INTERVAL_MS = 3600000UL;  // 1 hour
@@ -67,6 +71,32 @@ bool configured = false;
 // =====================================================================
 // Settings persistence
 // =====================================================================
+
+void factoryReset() {
+  Serial.println("FACTORY RESET — wiping all settings...");
+  prefs.begin("oilmon", false);
+  prefs.clear();
+  prefs.end();
+  Serial.println("Settings cleared. Rebooting into setup mode...");
+  delay(500);
+  ESP.restart();
+}
+
+void checkResetButton() {
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {  // Button pressed (active LOW)
+    unsigned long pressStart = millis();
+    Serial.print("BOOT button held — hold 5 sec to factory reset");
+    while (digitalRead(RESET_BUTTON_PIN) == LOW) {
+      unsigned long held = millis() - pressStart;
+      if (held >= RESET_HOLD_MS) {
+        Serial.println("\nFactory reset triggered!");
+        factoryReset();
+      }
+      delay(100);
+    }
+    Serial.println(" — released, no reset.");
+  }
+}
 
 void loadSettings() {
   prefs.begin("oilmon", true);  // read-only
@@ -188,6 +218,12 @@ String buildConfigPage() {
   page += "<button type='submit'>Save &amp; Restart</button>";
   page += "</form>";
 
+  // Factory reset section
+  page += "<h2 style='margin-top:40px;color:#e94560;'>Danger Zone</h2>";
+  page += "<button style='background:#333;border:1px solid #e94560;' ";
+  page += "onclick=\"if(confirm('Are you sure you want to factory reset? This will erase ALL settings (WiFi, Telegram, network) and reboot into setup mode.')){window.location='/factory-reset'}\">";
+  page += "Factory Reset</button>";
+
   page += "<script>";
   page += "function toggleStatic(){";
   page += "  document.getElementById('ip-fields').classList.toggle('show',";
@@ -239,6 +275,20 @@ void handleSave() {
   server.send(200, "text/html", buildSavedPage());
   delay(2000);
   ESP.restart();
+}
+
+void handleFactoryReset() {
+  String page = htmlHeader("Factory Reset");
+  page += "<h1>Factory Reset Complete</h1>";
+  page += "<div class='status warn'>";
+  page += "All settings have been erased. The device is rebooting into setup mode.<br><br>";
+  page += "Connect to WiFi <strong>" + String(AP_SSID) + "</strong> (password: <strong>" + String(AP_PASSWORD) + "</strong>)<br>";
+  page += "Then open <strong>http://192.168.4.1</strong> to reconfigure.";
+  page += "</div>";
+  page += htmlFooter();
+  server.send(200, "text/html", page);
+  delay(2000);
+  factoryReset();
 }
 
 void handleStatus() {
@@ -343,6 +393,11 @@ void setup() {
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
   pinMode(SENSOR_PIN, INPUT);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+
+  // Check if BOOT button is held at startup for factory reset
+  checkResetButton();
+
   loadSettings();
 
   if (!configured) {
@@ -363,12 +418,14 @@ void setup() {
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/status", handleStatus);
+  server.on("/factory-reset", handleFactoryReset);
   server.begin();
   Serial.println("Web server started.");
 }
 
 void loop() {
   server.handleClient();
+  checkResetButton();
 
   // Only run sensor logic when connected to WiFi (not in AP mode)
   if (apMode || WiFi.status() != WL_CONNECTED) {
