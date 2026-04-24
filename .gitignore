@@ -1,0 +1,16 @@
+# Build artifacts
+build/
+.pio/
+*.o
+*.elf
+*.bin
+*.map
+
+# IDE files
+.vscode/
+*.code-workspace
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
