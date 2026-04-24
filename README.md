@@ -2,6 +2,8 @@
 
 ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts when your oil tank is running low. Includes a built-in web interface for configuration — no hardcoded credentials required.
 
+![Telegram Alert Messages](images/TelegramBotSensorMessages.png)
+
 ## What It Does
 
 - **Web-based setup** — on first boot, creates a WiFi hotspot for configuration via your phone or laptop
@@ -9,27 +11,47 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 - Sends an immediate Telegram alert when oil drops below the sensor
 - Sends hourly reminders until the tank is refilled
 - Sends a confirmation message when the level is restored
+- Supports up to 3 Telegram chat IDs — notify multiple people
 - DHCP or static IP support, configurable from the web interface
+- Password-protected web interface with session timeout
+- OTA firmware updates via the web interface — no USB needed after initial flash
+- Factory reset via web interface or by holding the BOOT button for 5 seconds
 - All settings saved to flash — survives power cycles
 - Auto-reconnects WiFi if the connection drops
 - Debounced sensor readings to prevent false alerts
 
 ## Hardware
 
-| Component | Details |
-|-----------|---------|
-| Microcontroller | ESP32 (any dev board with CP210x or CH340 USB) |
-| Sensor | XKC-Y25-V non-contact liquid level sensor |
-| Power | 5V USB adapter |
-| Cable | Micro-USB or USB-C data cable (not charge-only) |
+| Component | Details | Price |
+|-----------|---------|-------|
+| ESP32 Dev Board | ESP-WROOM-32 with CP210x USB | [$9.99 (1-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Development-Microcontroller-Integrated/dp/B0718T232Z) or $17.99 (3-pack) |
+| XKC-Y25-V Sensor | Non-contact capacitive liquid level sensor | [$8.34 (1-pack)](https://www.amazon.com/caralin-XKC-Y25-V-Non-Contact-Liquid-Induction/dp/B0FT2CG9B2) or [$15.99 (4-pack)](https://www.amazon.com/DEVMO-Non-Contact-Induction-Detector-XKC-Y25-V/dp/B07TB3KZX7) |
+| USB Power Adapter | Any 5V/1A USB adapter | ~$5 |
+| USB Cable | Micro-USB **data** cable (not charge-only) | ~$5 |
+
+**Total cost: under $25**
+
+### ESP32 Dev Board
+
+![ESP32-WROOM-32 Development Board](images/ESP-32.jpg)
+
+### ESP32 Pin Diagram
+
+![ESP32 Pin Diagram](images/ESP-32_Pin_Diagram.jpg)
+
+### XKC-Y25-V Liquid Level Sensor
+
+![XKC-Y25-V Non-Contact Liquid Level Sensor](images/XKC-Y25-V.jpg)
 
 ### Wiring
 
 | XKC-Y25-V Wire | ESP32 Pin |
 |----------------|-----------|
-| Brown | 3V3 |
-| Blue | GND |
-| Yellow | GPIO4 (D4) |
+| Brown | 3V3 (Pin 1) |
+| Blue | GND (Pin 38) |
+| Yellow | GPIO4 / D4 (Pin 26) |
+
+Refer to the pin diagram above to locate the correct pins on your board.
 
 ## Setup
 
@@ -39,6 +61,7 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 2. Send `/newbot` and follow the prompts to create your bot
 3. Save the **bot token** it gives you
 4. Message [@userinfobot](https://t.me/userinfobot) to get your **chat ID**
+5. (Optional) Get chat IDs for up to 2 additional people to notify
 
 ### 2. Flash the ESP32
 
@@ -67,9 +90,10 @@ Or use the [Arduino IDE](https://www.arduino.cc/en/software) — add the ESP32 b
 1. On your phone or laptop, connect to WiFi network **`OilMonitor-Setup`** (password: `oiltank123`)
 2. Open a browser and go to **http://192.168.4.1**
 3. Enter your WiFi network name and password
-4. Enter your Telegram bot token and chat ID
+4. Enter your Telegram bot token and chat ID(s)
 5. Optionally configure a static IP instead of DHCP
-6. Click **Save & Restart**
+6. Set a web interface password (default: `admin` / `admin`)
+7. Click **Save & Restart**
 
 The device will reboot, connect to your WiFi, and send a Telegram message confirming it's online — including its IP address for future access to the settings page.
 
@@ -81,7 +105,16 @@ The device will reboot, connect to your WiFi, and send a Telegram message confir
 
 ### Reconfiguring
 
-You can access the settings page at any time by visiting the device's IP address in a browser. If the device can't connect to WiFi (e.g. after a network change), it will automatically fall back to AP mode so you can reconfigure.
+You can access the settings page at any time by visiting the device's IP address in a browser (login: `admin` + your password). If the device can't connect to WiFi (e.g. after a network change), it will automatically fall back to AP mode so you can reconfigure.
+
+## Web Interface Features
+
+- **Session-based authentication** with 15-minute inactivity timeout
+- **Sensitive fields** (bot token, chat IDs) are masked by default with eye toggle to reveal
+- **OTA firmware updates** — upload a `.bin` file to update without USB
+- **Factory reset** — from the web interface (with confirmation) or by holding the BOOT button 5 seconds
+- **DHCP/Static IP toggle** — configure network settings from the browser
+- **Auto-redirect** — after saving settings or updating firmware, the page counts down and redirects back
 
 ## API
 
@@ -98,7 +131,8 @@ Returns:
   "wifi_connected": true,
   "ip": "192.168.1.100",
   "ssid": "YourNetwork",
-  "uptime_sec": 3600
+  "uptime_sec": 3600,
+  "firmware": "1.1.0"
 }
 ```
 
@@ -128,18 +162,19 @@ These constants in the sketch can be adjusted:
 | `ALERT_INTERVAL_MS` | `3600000` (1 hour) | How often to re-send low-oil reminders |
 | `SENSOR_CHECK_MS` | `5000` (5 sec) | How often to read the sensor |
 | `DEBOUNCE_COUNT` | `3` | Consecutive same-readings required before acting |
+| `SESSION_TIMEOUT_MS` | `900000` (15 min) | Web interface session inactivity timeout |
 
 ## Contributing
 
 Contributions are welcome. Some ideas:
 
 - Multiple sensor support for different tank levels (e.g. low, critical)
-- OTA (over-the-air) firmware updates
 - Battery-powered deep sleep mode
 - MQTT integration for Home Assistant
 - Level history logging and graphing on the web interface
 - Temperature compensation for sensor accuracy
-- Email notifications as an alternative to Telegram
+- Email or SMS notifications as an alternative to Telegram
+- Percentage-based level estimation with multiple sensors
 
 Fork the repo, make your changes, and open a pull request.
 

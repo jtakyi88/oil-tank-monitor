@@ -55,6 +55,8 @@ String cfgSSID;
 String cfgPassword;
 String cfgBotToken;
 String cfgChatID;
+String cfgChatID2;
+String cfgChatID3;
 bool   cfgStaticIP    = false;
 String cfgIP;
 String cfgGateway;
@@ -115,6 +117,8 @@ void loadSettings() {
   cfgPassword  = prefs.getString("password", "");
   cfgBotToken  = prefs.getString("bot_token", "");
   cfgChatID    = prefs.getString("chat_id", "");
+  cfgChatID2   = prefs.getString("chat_id2", "");
+  cfgChatID3   = prefs.getString("chat_id3", "");
   cfgStaticIP  = prefs.getBool("static_ip", false);
   cfgIP        = prefs.getString("ip", "");
   cfgGateway   = prefs.getString("gateway", "");
@@ -131,6 +135,8 @@ void saveSettings() {
   prefs.putString("password", cfgPassword);
   prefs.putString("bot_token", cfgBotToken);
   prefs.putString("chat_id", cfgChatID);
+  prefs.putString("chat_id2", cfgChatID2);
+  prefs.putString("chat_id3", cfgChatID3);
   prefs.putBool("static_ip", cfgStaticIP);
   prefs.putString("ip", cfgIP);
   prefs.putString("gateway", cfgGateway);
@@ -167,6 +173,7 @@ String htmlHeader(const String& title) {
   h += ".ip-fields{display:none;}.ip-fields.show{display:block;}";
   h += "a{color:#16c79a;}";
   h += ".nav{margin:16px 0;font-size:0.9em;}";
+  h += ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}";
   h += "</style></head><body><div class='container'>";
   return h;
 }
@@ -205,9 +212,31 @@ String buildConfigPage() {
   // Telegram section
   page += "<h2>Telegram Notifications</h2>";
   page += "<label for='bot_token'>Bot Token</label>";
-  page += "<input type='text' id='bot_token' name='bot_token' value='" + cfgBotToken + "' placeholder='123456789:ABCdef...' required>";
+  page += "<div style='display:flex;gap:8px;align-items:center;'>";
+  page += "<input type='password' id='bot_token' name='bot_token' value='" + cfgBotToken + "' placeholder='123456789:ABCdef...' required style='flex:1;'>";
+  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('bot_token',this)\">&#128065;</button>";
+  page += "</div>";
   page += "<label for='chat_id'>Chat ID</label>";
-  page += "<input type='text' id='chat_id' name='chat_id' value='" + cfgChatID + "' placeholder='123456789' required>";
+  page += "<div style='display:flex;gap:8px;align-items:center;'>";
+  page += "<input type='password' id='chat_id' name='chat_id' value='" + cfgChatID + "' placeholder='123456789' required style='flex:1;'>";
+  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id',this)\">&#128065;</button>";
+  page += "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>";
+  page += "</div>";
+
+  // Chat ID 2 (hidden if empty)
+  page += "<div id='chat2-row' style='display:" + String(cfgChatID2.length() > 0 ? "flex" : "none") + ";gap:8px;align-items:center;margin-top:8px;'>";
+  page += "<input type='password' id='chat_id2' name='chat_id2' value='" + cfgChatID2 + "' placeholder='Chat ID 2 (optional)' style='flex:1;'>";
+  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id2',this)\">&#128065;</button>";
+  page += "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>";
+  page += "<button type='button' onclick=\"removeChatID(2)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
+  page += "</div>";
+
+  // Chat ID 3 (hidden if empty)
+  page += "<div id='chat3-row' style='display:" + String(cfgChatID3.length() > 0 ? "flex" : "none") + ";gap:8px;align-items:center;margin-top:8px;'>";
+  page += "<input type='password' id='chat_id3' name='chat_id3' value='" + cfgChatID3 + "' placeholder='Chat ID 3 (optional)' style='flex:1;'>";
+  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id3',this)\">&#128065;</button>";
+  page += "<button type='button' onclick=\"removeChatID(3)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
+  page += "</div>";
 
   // Network section
   page += "<h2>Network Settings</h2>";
@@ -259,6 +288,21 @@ String buildConfigPage() {
   page += "function toggleStatic(){";
   page += "  document.getElementById('ip-fields').classList.toggle('show',";
   page += "    document.getElementById('static_ip').checked);}";
+  page += "function toggleVis(id,btn){";
+  page += "  var f=document.getElementById(id);";
+  page += "  if(f.type==='password'){f.type='text';btn.style.opacity='0.5';}";
+  page += "  else{f.type='password';btn.style.opacity='1';}}";
+  page += "function addChatID(){";
+  page += "  var r2=document.getElementById('chat2-row');";
+  page += "  var r3=document.getElementById('chat3-row');";
+  page += "  if(r2.style.display==='none'){r2.style.display='flex';}";
+  page += "  else if(r3.style.display==='none'){r3.style.display='flex';}";
+  page += "}";
+  page += "function removeChatID(n){";
+  page += "  var r=document.getElementById('chat'+n+'-row');";
+  page += "  r.style.display='none';";
+  page += "  document.getElementById('chat_id'+n).value='';";
+  page += "}";
   page += "</script>";
 
   page += htmlFooter();
@@ -266,16 +310,21 @@ String buildConfigPage() {
 }
 
 String buildSavedPage() {
+  String targetIP = cfgStaticIP && cfgIP.length() > 0 ? cfgIP : WiFi.localIP().toString();
+  String targetURL = "http://" + targetIP;
+
   String page = htmlHeader("Settings Saved");
   page += "<h1>Settings Saved</h1>";
   page += "<div class='status'>";
-  page += "Configuration saved. The device is restarting and will connect to <strong>" + cfgSSID + "</strong>.<br><br>";
-  if (cfgStaticIP && cfgIP.length() > 0) {
-    page += "It will be available at <strong>http://" + cfgIP + "</strong>";
-  } else {
-    page += "Check your router or the serial monitor for the assigned IP address.";
-  }
+  page += "Configuration saved. The device is restarting and connecting to <strong>" + cfgSSID + "</strong>.<br><br>";
+  page += "Redirecting to <strong>" + targetURL + "</strong> in <span id='countdown'>15</span> seconds...";
   page += "</div>";
+  page += "<script>";
+  page += "var sec=15;var el=document.getElementById('countdown');";
+  page += "var t=setInterval(function(){sec--;el.textContent=sec;";
+  page += "if(sec<=0){clearInterval(t);window.location='" + targetURL + "';}";
+  page += "},1000);";
+  page += "</script>";
   page += htmlFooter();
   return page;
 }
@@ -305,10 +354,18 @@ String buildUpdateResultPage(bool success, const String& message) {
   page += "<div class='status" + String(success ? "" : " warn") + "'>";
   page += message;
   if (success) {
-    page += "<br><br>The device is rebooting now. Reconnect in a few seconds.";
+    page += "<br><br>Redirecting in <span id='countdown'>15</span> seconds...";
+    page += "</div>";
+    page += "<script>";
+    page += "var sec=15;var el=document.getElementById('countdown');";
+    page += "var t=setInterval(function(){sec--;el.textContent=sec;";
+    page += "if(sec<=0){clearInterval(t);window.location='/';}";
+    page += "},1000);";
+    page += "</script>";
+  } else {
+    page += "</div>";
+    page += "<div class='nav' style='margin-top:16px;'><a href='/update'>&larr; Try Again</a></div>";
   }
-  page += "</div>";
-  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
   page += htmlFooter();
   return page;
 }
@@ -412,6 +469,8 @@ void handleSave() {
   cfgPassword = server.arg("password");
   cfgBotToken = server.arg("bot_token");
   cfgChatID   = server.arg("chat_id");
+  cfgChatID2  = server.arg("chat_id2");
+  cfgChatID3  = server.arg("chat_id3");
   cfgStaticIP = server.hasArg("static_ip");
   cfgIP       = server.arg("ip");
   cfgGateway  = server.arg("gateway");
@@ -552,9 +611,16 @@ void initBot() {
 
 bool sendTelegram(const String& message) {
   if (!bot || WiFi.status() != WL_CONNECTED) return false;
-  bool sent = bot->sendMessage(cfgChatID.c_str(), message, "");
-  Serial.println(sent ? ("Telegram sent: " + message) : "Telegram FAILED.");
-  return sent;
+  bool anySent = false;
+  String ids[] = {cfgChatID, cfgChatID2, cfgChatID3};
+  for (int i = 0; i < 3; i++) {
+    if (ids[i].length() > 0) {
+      bool sent = bot->sendMessage(ids[i].c_str(), message, "");
+      Serial.println(sent ? ("Telegram sent to " + ids[i]) : ("Telegram FAILED for " + ids[i]));
+      if (sent) anySent = true;
+    }
+  }
+  return anySent;
 }
 
 // =====================================================================
