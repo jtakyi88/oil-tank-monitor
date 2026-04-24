@@ -22,6 +22,10 @@
 #include <Preferences.h>
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
+#include <Update.h>
+
+// ===== FIRMWARE VERSION =====
+const char* FW_VERSION = "1.1.0";
 
 // ===== AP MODE SETTINGS =====
 const char* AP_SSID     = "OilMonitor-Setup";
@@ -179,7 +183,8 @@ String buildConfigPage() {
     page += "<div class='status'>";
     page += "<strong>Status:</strong> Connected to <em>" + cfgSSID + "</em><br>";
     page += "<strong>IP:</strong> " + WiFi.localIP().toString() + "<br>";
-    page += "<strong>Oil Level:</strong> " + String(oilIsLow ? "LOW" : "OK");
+    page += "<strong>Oil Level:</strong> " + String(oilIsLow ? "LOW" : "OK") + "<br>";
+    page += "<strong>Firmware:</strong> v" + String(FW_VERSION);
     page += "</div>";
   } else if (apMode) {
     page += "<div class='status warn'>";
@@ -234,6 +239,12 @@ String buildConfigPage() {
   page += "<button type='submit'>Save &amp; Restart</button>";
   page += "</form>";
 
+  // Firmware update link
+  page += "<h2>Firmware</h2>";
+  page += "<p style='font-size:0.9em;'>Current version: <strong>v" + String(FW_VERSION) + "</strong></p>";
+  page += "<a href='/update' style='display:block;text-align:center;padding:12px;background:#0f3460;";
+  page += "border-radius:6px;color:#e0e0e0;text-decoration:none;'>Upload Firmware Update</a>";
+
   // Logout and danger zone
   page += "<div style='margin-top:24px;text-align:center;'>";
   page += "<a href='/logout' style='color:#e0e0e0;font-size:0.9em;'>Log Out</a>";
@@ -265,6 +276,39 @@ String buildSavedPage() {
     page += "Check your router or the serial monitor for the assigned IP address.";
   }
   page += "</div>";
+  page += htmlFooter();
+  return page;
+}
+
+String buildUpdatePage() {
+  String page = htmlHeader("Firmware Update");
+  page += "<h1>Firmware Update</h1>";
+  page += "<div class='status'>";
+  page += "<strong>Current Version:</strong> v" + String(FW_VERSION) + "<br>";
+  page += "<strong>Free Space:</strong> " + String(ESP.getFreeSketchSpace() / 1024) + " KB";
+  page += "</div>";
+  page += "<p style='font-size:0.9em;'>Upload a compiled <code>.bin</code> firmware file. The device will flash itself and reboot.</p>";
+  page += "<form method='POST' action='/update' enctype='multipart/form-data'>";
+  page += "<label for='firmware'>Firmware File (.bin)</label>";
+  page += "<input type='file' id='firmware' name='firmware' accept='.bin' required ";
+  page += "style='padding:10px;background:#16213e;border:1px solid #333;border-radius:6px;width:100%;box-sizing:border-box;'>";
+  page += "<button type='submit' onclick=\"this.innerText='Uploading... do not power off';this.disabled=true;this.form.submit();\">Upload &amp; Install</button>";
+  page += "</form>";
+  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
+  page += htmlFooter();
+  return page;
+}
+
+String buildUpdateResultPage(bool success, const String& message) {
+  String page = htmlHeader("Update " + String(success ? "Complete" : "Failed"));
+  page += "<h1>Firmware Update " + String(success ? "Complete" : "Failed") + "</h1>";
+  page += "<div class='status" + String(success ? "" : " warn") + "'>";
+  page += message;
+  if (success) {
+    page += "<br><br>The device is rebooting now. Reconnect in a few seconds.";
+  }
+  page += "</div>";
+  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
   page += htmlFooter();
   return page;
 }
@@ -408,9 +452,49 @@ void handleStatus() {
   json += "\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"ssid\":\"" + cfgSSID + "\",";
-  json += "\"uptime_sec\":" + String(millis() / 1000);
+  json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
+  json += "\"firmware\":\"" + String(FW_VERSION) + "\"";
   json += "}";
   server.send(200, "application/json", json);
+}
+
+void handleUpdatePage() {
+  if (!requireAuth()) return;
+  server.send(200, "text/html", buildUpdatePage());
+}
+
+void handleUpdateUpload() {
+  if (!requireAuth()) return;
+  HTTPUpload& upload = server.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.println("OTA update starting: " + upload.filename);
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.println("OTA update success: " + String(upload.totalSize) + " bytes");
+    } else {
+      Update.printError(Serial);
+    }
+  }
+}
+
+void handleUpdateResult() {
+  if (!requireAuth()) return;
+  bool success = !Update.hasError();
+  if (success) {
+    server.send(200, "text/html", buildUpdateResultPage(true, "Firmware updated successfully."));
+    delay(2000);
+    ESP.restart();
+  } else {
+    server.send(200, "text/html", buildUpdateResultPage(false, "Update failed. Please try again with a valid .bin file."));
+  }
 }
 
 // =====================================================================
@@ -533,6 +617,8 @@ void setup() {
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/status", handleStatus);
+  server.on("/update", HTTP_GET, handleUpdatePage);
+  server.on("/update", HTTP_POST, handleUpdateResult, handleUpdateUpload);
   server.on("/factory-reset", handleFactoryReset);
   server.begin();
   Serial.println("Web server started.");
