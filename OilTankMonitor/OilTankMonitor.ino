@@ -56,6 +56,8 @@ String cfgIP;
 String cfgGateway;
 String cfgSubnet;
 String cfgDNS;
+const char* WEB_USER  = "admin";
+String cfgWebPassword = "admin";
 
 // Sensor state
 unsigned long lastAlertTime   = 0;
@@ -108,7 +110,8 @@ void loadSettings() {
   cfgIP        = prefs.getString("ip", "");
   cfgGateway   = prefs.getString("gateway", "");
   cfgSubnet    = prefs.getString("subnet", "255.255.255.0");
-  cfgDNS       = prefs.getString("dns", "8.8.8.8");
+  cfgDNS         = prefs.getString("dns", "8.8.8.8");
+  cfgWebPassword = prefs.getString("web_pass", "admin");
   prefs.end();
   configured = (cfgSSID.length() > 0 && cfgBotToken.length() > 0 && cfgChatID.length() > 0);
 }
@@ -124,6 +127,7 @@ void saveSettings() {
   prefs.putString("gateway", cfgGateway);
   prefs.putString("subnet", cfgSubnet);
   prefs.putString("dns", cfgDNS);
+  prefs.putString("web_pass", cfgWebPassword);
   prefs.end();
 }
 
@@ -219,6 +223,13 @@ String buildConfigPage() {
   page += "</form>";
 
   // Factory reset section
+  // Web interface login section
+  page += "<h2>Web Interface Login</h2>";
+  page += "<label>Username</label>";
+  page += "<input type='text' value='admin' disabled style='opacity:0.6;'>";
+  page += "<label for='web_pass'>Password</label>";
+  page += "<input type='password' id='web_pass' name='web_pass' value='" + cfgWebPassword + "'>";
+
   page += "<h2 style='margin-top:40px;color:#e94560;'>Danger Zone</h2>";
   page += "<button style='background:#333;border:1px solid #e94560;' ";
   page += "onclick=\"if(confirm('Are you sure you want to factory reset? This will erase ALL settings (WiFi, Telegram, network) and reboot into setup mode.')){window.location='/factory-reset'}\">";
@@ -253,11 +264,23 @@ String buildSavedPage() {
 // Web server handlers
 // =====================================================================
 
+bool requireAuth() {
+  // Skip auth in AP mode (first-time setup — no credentials set yet)
+  if (apMode) return true;
+  if (!server.authenticate(WEB_USER, cfgWebPassword.c_str())) {
+    server.requestAuthentication();
+    return false;
+  }
+  return true;
+}
+
 void handleRoot() {
+  if (!requireAuth()) return;
   server.send(200, "text/html", buildConfigPage());
 }
 
 void handleSave() {
+  if (!requireAuth()) return;
   cfgSSID     = server.arg("ssid");
   cfgPassword = server.arg("password");
   cfgBotToken = server.arg("bot_token");
@@ -271,6 +294,9 @@ void handleSave() {
   if (cfgSubnet.length() == 0) cfgSubnet = "255.255.255.0";
   if (cfgDNS.length() == 0)    cfgDNS = "8.8.8.8";
 
+  String newPass = server.arg("web_pass");
+  if (newPass.length() > 0) cfgWebPassword = newPass;
+
   saveSettings();
   server.send(200, "text/html", buildSavedPage());
   delay(2000);
@@ -278,6 +304,7 @@ void handleSave() {
 }
 
 void handleFactoryReset() {
+  if (!requireAuth()) return;
   String page = htmlHeader("Factory Reset");
   page += "<h1>Factory Reset Complete</h1>";
   page += "<div class='status warn'>";
@@ -292,6 +319,7 @@ void handleFactoryReset() {
 }
 
 void handleStatus() {
+  if (!requireAuth()) return;
   String json = "{";
   json += "\"oil_low\":" + String(oilIsLow ? "true" : "false") + ",";
   json += "\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
