@@ -66,6 +66,11 @@ bool oilIsLow                = false;
 int debounceCounter          = 0;
 bool lastRawReading          = false;
 
+// Session management
+const unsigned long SESSION_TIMEOUT_MS = 900000UL;  // 15 minutes
+unsigned long sessionToken    = 0;   // 0 = no active session
+unsigned long lastActivityTime = 0;
+
 // Mode tracking
 bool apMode = false;
 bool configured = false;
@@ -219,16 +224,20 @@ String buildConfigPage() {
   page += "<input type='text' id='dns' name='dns' value='" + cfgDNS + "' placeholder='8.8.8.8'>";
   page += "</div>";
 
-  page += "<button type='submit'>Save &amp; Restart</button>";
-  page += "</form>";
-
-  // Factory reset section
-  // Web interface login section
-  page += "<h2>Web Interface Login</h2>";
+  // Web interface password section
+  page += "<h2>Web Interface Password</h2>";
   page += "<label>Username</label>";
   page += "<input type='text' value='admin' disabled style='opacity:0.6;'>";
   page += "<label for='web_pass'>Password</label>";
   page += "<input type='password' id='web_pass' name='web_pass' value='" + cfgWebPassword + "'>";
+
+  page += "<button type='submit'>Save &amp; Restart</button>";
+  page += "</form>";
+
+  // Logout and danger zone
+  page += "<div style='margin-top:24px;text-align:center;'>";
+  page += "<a href='/logout' style='color:#e0e0e0;font-size:0.9em;'>Log Out</a>";
+  page += "</div>";
 
   page += "<h2 style='margin-top:40px;color:#e94560;'>Danger Zone</h2>";
   page += "<button style='background:#333;border:1px solid #e94560;' ";
@@ -261,17 +270,91 @@ String buildSavedPage() {
 }
 
 // =====================================================================
-// Web server handlers
+// Session management
 // =====================================================================
 
+unsigned long generateToken() {
+  unsigned long t = esp_random();
+  if (t == 0) t = 1;  // reserve 0 for "no session"
+  return t;
+}
+
+String getSessionCookie() {
+  if (!server.hasHeader("Cookie")) return "";
+  String cookies = server.header("Cookie");
+  int idx = cookies.indexOf("session=");
+  if (idx < 0) return "";
+  int start = idx + 8;
+  int end = cookies.indexOf(';', start);
+  if (end < 0) end = cookies.length();
+  return cookies.substring(start, end);
+}
+
+bool isSessionValid() {
+  if (sessionToken == 0) return false;
+  String cookie = getSessionCookie();
+  if (cookie != String(sessionToken)) return false;
+  if (millis() - lastActivityTime > SESSION_TIMEOUT_MS) {
+    sessionToken = 0;  // expired
+    return false;
+  }
+  lastActivityTime = millis();  // refresh on activity
+  return true;
+}
+
 bool requireAuth() {
-  // Skip auth in AP mode (first-time setup — no credentials set yet)
   if (apMode) return true;
-  if (!server.authenticate(WEB_USER, cfgWebPassword.c_str())) {
-    server.requestAuthentication();
+  if (!isSessionValid()) {
+    server.sendHeader("Location", "/login");
+    server.send(302, "text/plain", "Redirecting to login...");
     return false;
   }
   return true;
+}
+
+String buildLoginPage(bool failed) {
+  String page = htmlHeader("Oil Tank Monitor - Login");
+  page += "<h1>Oil Tank Monitor</h1>";
+  if (failed) {
+    page += "<div class='status warn'>Invalid password. Try again.</div>";
+  }
+  page += "<form method='POST' action='/login'>";
+  page += "<label for='username'>Username</label>";
+  page += "<input type='text' id='username' value='admin' disabled style='opacity:0.6;'>";
+  page += "<label for='password'>Password</label>";
+  page += "<input type='password' id='password' name='password' autofocus required>";
+  page += "<button type='submit'>Log In</button>";
+  page += "</form>";
+  page += htmlFooter();
+  return page;
+}
+
+// =====================================================================
+// Web server handlers
+// =====================================================================
+
+void handleLogin() {
+  if (server.method() == HTTP_POST) {
+    String password = server.arg("password");
+    if (password == cfgWebPassword) {
+      sessionToken = generateToken();
+      lastActivityTime = millis();
+      server.sendHeader("Set-Cookie", "session=" + String(sessionToken) + "; Path=/; HttpOnly");
+      server.sendHeader("Location", "/");
+      server.send(302, "text/plain", "Login successful");
+      return;
+    }
+    server.send(200, "text/html", buildLoginPage(true));
+    return;
+  }
+  server.send(200, "text/html", buildLoginPage(false));
+}
+
+void handleLogout() {
+  sessionToken = 0;
+  server.sendHeader("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly");
+  server.sendHeader("Location", "/login");
+  server.send(302, "text/plain", "Logged out");
 }
 
 void handleRoot() {
@@ -443,6 +526,10 @@ void setup() {
   }
 
   // Start web server in both modes
+  const char* headerKeys[] = {"Cookie"};
+  server.collectHeaders(headerKeys, 1);
+  server.on("/login", handleLogin);
+  server.on("/logout", handleLogout);
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.on("/status", handleStatus);
