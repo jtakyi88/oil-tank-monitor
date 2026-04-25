@@ -26,10 +26,11 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 |-----------|---------|-------|
 | ESP32 Dev Board | ESP-WROOM-32 with CP210x USB | [$9.99 (1-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Development-Microcontroller-Integrated/dp/B0718T232Z) or [$17.99 (3-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Bluetooth-ESP32-DevKitC-32-Development/dp/B0CNYK7WT2) |
 | XKC-Y25-V Sensor | Non-contact capacitive liquid level sensor | [$8.34 (1-pack)](https://www.amazon.com/caralin-XKC-Y25-V-Non-Contact-Liquid-Induction/dp/B0FT2CG9B2) or [$15.99 (4-pack)](https://www.amazon.com/DEVMO-Non-Contact-Induction-Detector-XKC-Y25-V/dp/B07TB3KZX7) |
+| Jumper Wires | Female-to-female Dupont jumpers (or solder direct) | [$6.98](https://www.amazon.com/EDGELEC-Breadboard-Optional-Assorted-Multicolored/dp/B07GD2BWPY) |
 | USB Power Adapter | Any 5V/1A USB adapter | ~$5 |
 | USB Cable | Micro-USB **data** cable (not charge-only) | ~$5 |
 
-**Total cost: under $25**
+**Total cost: under $30**
 
 ### ESP32 Dev Board
 
@@ -43,6 +44,12 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 
 ![XKC-Y25-V Non-Contact Liquid Level Sensor](images/XKC-Y25-V.jpg)
 
+### Jumper Wires
+
+![Female-to-Female Dupont Jumper Wires](images/BreadBoard_Jumper_Wires.jpg)
+
+Female-to-female Dupont jumpers connect the sensor's three leads directly to the ESP32 header pins — no soldering or breadboard required.
+
 ### Wiring
 
 | XKC-Y25-V Wire | ESP32 Pin |
@@ -52,6 +59,12 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 | Yellow | GPIO4 / D4 (Pin 26) |
 
 Refer to the pin diagram above to locate the correct pins on your board.
+
+### Assembled Hardware
+
+![Assembled ESP32 + XKC-Y25-V on USB power](images/Exposed_Working_Sensor_With_Power.jpg)
+
+A complete build: ESP32 powered over USB with the XKC-Y25-V sensor wired in. The sensor's red LED lights when liquid is detected.
 
 ## Setup
 
@@ -97,11 +110,25 @@ Or use the [Arduino IDE](https://www.arduino.cc/en/software) — add the ESP32 b
 
 The device will reboot, connect to your WiFi, and send a Telegram message confirming it's online — including its IP address for future access to the settings page.
 
+#### Mobile Setup Screens
+
+| WiFi & Telegram | Network, Password & Firmware |
+|-----------------|-------------------------------|
+| ![Setup form top half](images/ESP-32_Monitor_Interface_1.jpg) | ![Setup form bottom half](images/ESP-32_Monitor_Interface_2.jpg) |
+
+The setup portal at `http://192.168.4.1` is mobile-friendly — phone, tablet, or laptop all work.
+
 ### 4. Install
 
 1. Attach the XKC-Y25-V sensor to the sight glass tube at your desired low-level threshold
 2. Power the ESP32 from a USB adapter near the tank
 3. Keep the USB cable under 5 meters — if you need more distance, use a longer extension cord to the adapter instead
+
+#### Portable / Backup Power
+
+![ESP32 powered by a USB power bank](images/Exposed_Working_Sensor_With_BatteryPower.jpg)
+
+The ESP32 runs on any 5V USB source, so a power bank works for bench testing or short outages. For permanent install, use a wall adapter — the always-on web portal will drain a typical 10,000 mAh bank in roughly 1–2 days.
 
 ### Reconfiguring
 
@@ -139,6 +166,13 @@ Returns:
 ## Sensor Notes
 
 The XKC-Y25-V is a capacitive sensor that detects liquid through glass without any contact with the fluid. It outputs HIGH when liquid is present and LOW when absent. The firmware includes a 3-read debounce to prevent false triggers from sloshing or vibration.
+
+### How the Sensor Reads Liquid
+
+| Liquid above sensor (HIGH) | Liquid below sensor (LOW) |
+|----------------------------|----------------------------|
+| ![Sensor detecting liquid — red LED on](images/Liquid_High_Level.jpg) | ![Sensor sees no liquid — LED off](images/Liquid_Low_Level.jpg) |
+| Red LED on, signal HIGH, oil **present** — no alert. | LED off, signal LOW, oil **absent** — Telegram alert triggers after debounce. |
 
 If your sensor variant has inverted logic (LOW = liquid present), change this line in the sketch:
 
