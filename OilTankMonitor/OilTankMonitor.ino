@@ -84,6 +84,12 @@ String cfgDNS;
 const char* WEB_USER  = "admin";
 String cfgWebPassword = "admin";
 
+// Sensor configuration
+SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgraders
+uint16_t cfgTofLow  = 200;                   // mm — alert threshold
+uint16_t cfgTofHalf = 130;                   // mm — half mark
+uint16_t cfgTofHigh = 60;                    // mm — refill complete
+
 // Sensor state
 unsigned long lastAlertTime   = 0;
 unsigned long lastSensorCheck = 0;
@@ -144,6 +150,10 @@ void loadSettings() {
   cfgSubnet    = prefs.getString("subnet", "255.255.255.0");
   cfgDNS         = prefs.getString("dns", "8.8.8.8");
   cfgWebPassword = prefs.getString("web_pass", "admin");
+  cfgSensorType = (SensorType)prefs.getUChar("sensor_type", 0);
+  cfgTofLow     = prefs.getUShort("tof_low", 200);
+  cfgTofHalf    = prefs.getUShort("tof_half", 130);
+  cfgTofHigh    = prefs.getUShort("tof_high", 60);
   prefs.end();
   configured = (cfgSSID.length() > 0 && cfgBotToken.length() > 0 && cfgChatID.length() > 0);
 }
@@ -162,6 +172,10 @@ void saveSettings() {
   prefs.putString("subnet", cfgSubnet);
   prefs.putString("dns", cfgDNS);
   prefs.putString("web_pass", cfgWebPassword);
+  prefs.putUChar("sensor_type", (uint8_t)cfgSensorType);
+  prefs.putUShort("tof_low", cfgTofLow);
+  prefs.putUShort("tof_half", cfgTofHalf);
+  prefs.putUShort("tof_high", cfgTofHigh);
   prefs.end();
 }
 
@@ -679,6 +693,9 @@ void setup() {
   checkResetButton();
 
   loadSettings();
+  Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
+                cfgSensorType == SENSOR_DIGITAL ? "DIGITAL" : "TOF",
+                cfgTofLow, cfgTofHalf, cfgTofHigh);
 
   if (!configured) {
     Serial.println("No configuration found — starting AP mode.");
