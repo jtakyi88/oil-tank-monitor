@@ -23,6 +23,25 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <Update.h>
+#include <Wire.h>
+#include <Adafruit_VL53L0X.h>
+
+// ===== SENSOR ABSTRACTION =====
+enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1 };
+
+struct SensorReading {
+  bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
+  bool digitalState;     // HIGH = object/liquid present; meaningful when SENSOR_DIGITAL
+  uint16_t distanceMm;   // mm to puck; meaningful when SENSOR_TOF
+};
+
+const int I2C_SDA_PIN = 21;            // ESP32 default
+const int I2C_SCL_PIN = 22;            // ESP32 default
+const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
+const int TOF_MIN_MM = 30;             // VL53L0X spec lower bound
+const int TOF_MAX_MM = 2000;           // VL53L0X spec upper bound (mm we accept)
+const int TOF_FAULT_CYCLES = 5;        // consecutive invalid reads → fault alert
+const int TOF_RECOVERY_CYCLES = 3;     // consecutive invalid reads → I2C reinit attempt
 
 // ===== FIRMWARE VERSION =====
 const char* FW_VERSION = "1.1.0";
