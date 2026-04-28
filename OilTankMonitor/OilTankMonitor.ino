@@ -657,24 +657,55 @@ bool sendTelegram(const String& message) {
 }
 
 // =====================================================================
-// Sensor
+// Sensor — dispatch on cfgSensorType
 // =====================================================================
 
-bool readSensorDebounced() {
-  // XKC-Y25-V: HIGH = liquid present, LOW = no liquid
-  bool noLiquid = digitalRead(SENSOR_PIN) == LOW;
+Adafruit_VL53L0X tofSensor;     // unused until Task 4 wires the ToF path
+int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
+bool sensorFaultActive = false; // Task 9
 
-  if (noLiquid == lastRawReading) {
-    if (debounceCounter < DEBOUNCE_COUNT) debounceCounter++;
-  } else {
-    debounceCounter = 1;
-    lastRawReading = noLiquid;
+bool initSensor() {
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    pinMode(SENSOR_PIN, INPUT);
+    Serial.println("Sensor: DIGITAL on GPIO" + String(SENSOR_PIN));
+    return true;
   }
+  // ToF path — implemented in Task 4
+  Serial.println("Sensor: TOF init not yet implemented");
+  return false;
+}
 
-  if (debounceCounter >= DEBOUNCE_COUNT) {
-    return noLiquid;
+SensorReading readSensorRaw() {
+  SensorReading r = { false, false, 0 };
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    r.digitalState = (digitalRead(SENSOR_PIN) == HIGH);
+    r.valid = true;
+    return r;
   }
-  return oilIsLow;
+  // ToF path — implemented in Task 4
+  return r;
+}
+
+// Existing 3-read debounce, now operating on SensorReading
+SensorReading readSensor() {
+  static int debounce = 0;
+  static SensorReading lastRaw = { false, false, 0 };
+  SensorReading raw = readSensorRaw();
+
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    if (raw.digitalState == lastRaw.digitalState && raw.valid) {
+      if (debounce < DEBOUNCE_COUNT) debounce++;
+    } else {
+      debounce = 1;
+      lastRaw = raw;
+    }
+    if (debounce >= DEBOUNCE_COUNT) return raw;
+    // Not yet stable — return last accepted reading
+    SensorReading last = { true, !oilIsLow, 0 };  // oilIsLow tracks "no liquid"
+    return last;
+  }
+  // ToF filtering implemented in Task 5
+  return raw;
 }
 
 // =====================================================================
@@ -686,7 +717,7 @@ void setup() {
   delay(1000);
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
-  pinMode(SENSOR_PIN, INPUT);
+  initSensor();
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
   // Check if BOOT button is held at startup for factory reset
@@ -748,7 +779,9 @@ void loop() {
   if (now - lastSensorCheck >= SENSOR_CHECK_MS) {
     lastSensorCheck = now;
 
-    bool currentlyLow = readSensorDebounced();
+    SensorReading reading = readSensor();
+    // For digital sensor: digitalState HIGH = liquid present; LOW = no liquid (oil low)
+    bool currentlyLow = reading.valid && !reading.digitalState;
 
     if (currentlyLow && !oilIsLow) {
       oilIsLow = true;
