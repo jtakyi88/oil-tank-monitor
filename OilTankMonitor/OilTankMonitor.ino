@@ -94,8 +94,6 @@ uint16_t cfgTofHigh = 60;                    // mm — refill complete
 unsigned long lastAlertTime   = 0;
 unsigned long lastSensorCheck = 0;
 bool oilIsLow                = false;
-int debounceCounter          = 0;
-bool lastRawReading          = false;
 
 // Session management
 const unsigned long SESSION_TIMEOUT_MS = 900000UL;  // 15 minutes
