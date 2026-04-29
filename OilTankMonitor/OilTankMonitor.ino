@@ -811,6 +811,34 @@ LevelState bucketReading(const SensorReading& r, LevelState prev) {
 // Setup & Loop
 // =====================================================================
 
+void fireTransitionMessage(LevelState from, LevelState to) {
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    // Digital: only LOW <-> HIGH transitions are meaningful
+    if (from == LEVEL_LOW && to == LEVEL_HIGH) {
+      sendTelegram("✅ Oil tank level restored — sensor detects oil above the line.");
+    } else if (from == LEVEL_HIGH && to == LEVEL_LOW) {
+      sendTelegram("⚠️ OIL TANK LOW — the level has dropped below the sensor. Please refill.");
+    }
+    return;
+  }
+  // ToF: full multi-state transition matrix
+  if (from == LEVEL_LOW && to >= LEVEL_BELOW_HALF) {
+    sendTelegram("✅ Oil tank above low mark — refill detected.");
+  }
+  if (from <= LEVEL_BELOW_HALF && to >= LEVEL_ABOVE_HALF) {
+    sendTelegram("🔼 Tank is half refilled.");
+  }
+  if (from <= LEVEL_ABOVE_HALF && to == LEVEL_HIGH) {
+    sendTelegram("🔝 Tank at HIGH — refill complete.");
+  }
+  if (from >= LEVEL_ABOVE_HALF && to <= LEVEL_BELOW_HALF && to != LEVEL_LOW) {
+    sendTelegram("📉 Tank is half empty — plan a refill.");
+  }
+  if (from >= LEVEL_BELOW_HALF && to == LEVEL_LOW) {
+    sendTelegram("⚠️ OIL TANK LOW — please refill.");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -879,22 +907,25 @@ void loop() {
     lastSensorCheck = now;
 
     SensorReading reading = readSensor();
-    // For digital sensor: digitalState HIGH = liquid present; LOW = no liquid (oil low)
-    bool currentlyLow = reading.valid && !reading.digitalState;
+    LevelState newState = bucketReading(reading, currentState);
 
-    if (currentlyLow && !oilIsLow) {
-      oilIsLow = true;
-      Serial.println("OIL LOW detected!");
-      sendTelegram("⚠️ OIL TANK LOW — the level has dropped below the sensor. Please refill.");
-      lastAlertTime = now;
-    } else if (!currentlyLow && oilIsLow) {
-      oilIsLow = false;
-      Serial.println("Oil level RESTORED.");
-      sendTelegram("✅ Oil tank level restored — sensor detects oil above the line.");
+    if (currentState == LEVEL_UNKNOWN && newState != LEVEL_UNKNOWN) {
+      // Boot: first valid reading initializes silently. Online message handled in setup().
+      currentState = newState;
+      Serial.printf("Boot: initial level=%s\n", levelStateName(currentState));
+    } else if (newState != currentState && newState != LEVEL_UNKNOWN) {
+      Serial.printf("Transition: %s -> %s\n", levelStateName(currentState), levelStateName(newState));
+      fireTransitionMessage(currentState, newState);
+      currentState = newState;
+      if (newState == LEVEL_LOW) lastAlertTime = now;
     }
+
+    // Maintain legacy oilIsLow for /status backward compat
+    oilIsLow = (currentState == LEVEL_LOW);
   }
 
-  if (oilIsLow && (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
+  // Hourly LOW reminder — same behavior as v1.x, now keyed on currentState
+  if (currentState == LEVEL_LOW && (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
     Serial.println("Sending hourly low-oil reminder.");
     sendTelegram("⚠️ REMINDER: Oil tank is still LOW. Please refill.");
     lastAlertTime = now;
