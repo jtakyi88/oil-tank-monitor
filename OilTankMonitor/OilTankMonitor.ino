@@ -700,6 +700,12 @@ SensorReading readSensorRaw() {
   return r;
 }
 
+uint16_t medianOf3(uint16_t a, uint16_t b, uint16_t c) {
+  if ((a >= b && a <= c) || (a <= b && a >= c)) return a;
+  if ((b >= a && b <= c) || (b <= a && b >= c)) return b;
+  return c;
+}
+
 // Existing 3-read debounce, now operating on SensorReading
 SensorReading readSensor() {
   static int debounce = 0;
@@ -718,8 +724,23 @@ SensorReading readSensor() {
     SensorReading last = { true, !oilIsLow, 0 };  // oilIsLow tracks "no liquid"
     return last;
   }
-  // ToF filtering implemented in Task 5
-  return raw;
+  // ToF: take 3 readings ~50 ms apart, return the median (rejects single-shot spikes)
+  SensorReading r1 = raw;
+  delay(50);
+  SensorReading r2 = readSensorRaw();
+  delay(50);
+  SensorReading r3 = readSensorRaw();
+  int validCount = (int)r1.valid + (int)r2.valid + (int)r3.valid;
+  SensorReading out = { false, false, 0 };
+  if (validCount >= 2) {
+    // Use only valid readings — substitute equal values for invalids so median works
+    uint16_t a = r1.valid ? r1.distanceMm : (r2.valid ? r2.distanceMm : r3.distanceMm);
+    uint16_t b = r2.valid ? r2.distanceMm : (r1.valid ? r1.distanceMm : r3.distanceMm);
+    uint16_t c = r3.valid ? r3.distanceMm : (r1.valid ? r1.distanceMm : r2.distanceMm);
+    out.distanceMm = medianOf3(a, b, c);
+    out.valid = true;
+  }
+  return out;
 }
 
 // =====================================================================
