@@ -35,6 +35,24 @@ struct SensorReading {
   uint16_t distanceMm;   // mm to puck; meaningful when SENSOR_TOF
 };
 
+enum LevelState {
+  LEVEL_LOW,           // distance > cfgTofLow  (or digital: no liquid)
+  LEVEL_BELOW_HALF,    // cfgTofHalf < distance <= cfgTofLow
+  LEVEL_ABOVE_HALF,    // cfgTofHigh < distance <= cfgTofHalf
+  LEVEL_HIGH,          // distance <= cfgTofHigh (digital: liquid present)
+  LEVEL_UNKNOWN        // no valid reading yet (boot)
+};
+
+const char* levelStateName(LevelState s) {
+  switch (s) {
+    case LEVEL_LOW:        return "LOW";
+    case LEVEL_BELOW_HALF: return "BELOW_HALF";
+    case LEVEL_ABOVE_HALF: return "ABOVE_HALF";
+    case LEVEL_HIGH:       return "HIGH";
+    default:               return "UNKNOWN";
+  }
+}
+
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
@@ -89,6 +107,8 @@ SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgrad
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
+
+LevelState currentState = LEVEL_UNKNOWN;
 
 // Sensor state
 unsigned long lastAlertTime   = 0;
@@ -741,6 +761,50 @@ SensorReading readSensor() {
     out.valid = true;
   }
   return out;
+}
+
+// Map a SensorReading to a LevelState, applying hysteresis around ToF thresholds.
+// `prev` is the current state — used to bias the bucketing toward stability when the
+// reading sits near a threshold.
+LevelState bucketReading(const SensorReading& r, LevelState prev) {
+  if (!r.valid) return prev;   // hold last state on a single bad reading
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    // Digital model: only LOW or HIGH (HIGH = liquid present)
+    return r.digitalState ? LEVEL_HIGH : LEVEL_LOW;
+  }
+  // ToF: distance in mm; smaller = fuller. Hysteresis: require crossing by ±H.
+  uint16_t d = r.distanceMm;
+  uint16_t hyst = TOF_HYSTERESIS_MM;
+  // Adjust thresholds based on direction of approach.
+  // Going UP into a fuller state (smaller d): use lowerBound = threshold - hyst.
+  // Going DOWN into an emptier state (larger d): use upperBound = threshold + hyst.
+  // We pick effective thresholds that resist re-crossing in the opposite direction.
+  uint16_t lowT  = cfgTofLow;
+  uint16_t halfT = cfgTofHalf;
+  uint16_t highT = cfgTofHigh;
+  switch (prev) {
+    case LEVEL_LOW:        if (d >  lowT  - hyst) return LEVEL_LOW;
+                            if (d >  halfT - hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_BELOW_HALF: if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT - hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_ABOVE_HALF: if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT + hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_HIGH:       if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT + hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT + hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    default:               // LEVEL_UNKNOWN — initial bucketing without hysteresis bias
+                            if (d >  lowT)  return LEVEL_LOW;
+                            if (d >  halfT) return LEVEL_BELOW_HALF;
+                            if (d >  highT) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+  }
 }
 
 // =====================================================================
