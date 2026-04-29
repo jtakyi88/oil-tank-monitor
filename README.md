@@ -26,11 +26,21 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 |-----------|---------|-------|
 | ESP32 Dev Board | ESP-WROOM-32 with CP210x USB | [$9.99 (1-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Development-Microcontroller-Integrated/dp/B0718T232Z) or [$17.99 (3-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Bluetooth-ESP32-DevKitC-32-Development/dp/B0CNYK7WT2) |
 | XKC-Y25-V Sensor | Non-contact capacitive liquid level sensor | [$8.34 (1-pack)](https://www.amazon.com/caralin-XKC-Y25-V-Non-Contact-Liquid-Induction/dp/B0FT2CG9B2) or [$15.99 (4-pack)](https://www.amazon.com/DEVMO-Non-Contact-Induction-Detector-XKC-Y25-V/dp/B07TB3KZX7) |
+| VL53L0X ToF Module | Time-of-Flight distance sensor (for dry mechanical float gauges) | [~$3-5](https://www.adafruit.com/product/3317) |
 | Jumper Wires | Female-to-female Dupont jumpers (or solder direct) | [$6.98](https://www.amazon.com/EDGELEC-Breadboard-Optional-Assorted-Multicolored/dp/B07GD2BWPY) |
 | USB Power Adapter | Any 5V/1A USB adapter | ~$5 |
 | USB Cable | Micro-USB **data** cable (not charge-only) | ~$5 |
 
 **Total cost: under $30**
+
+### Choosing a Sensor
+
+The firmware supports two sensor types, selectable at runtime from the web interface:
+
+- **Digital threshold** (default): single-threshold digital sensor on GPIO4. Works with the XKC-Y25-V capacitive sensor (for sight gauges containing actual liquid), an IR break-beam pair (for dry mechanical floats with an opaque puck), a reed switch + magnet, a Hall-effect sensor, or any other HIGH/LOW signal source. Single notification: tank LOW / restored.
+- **ToF distance** (VL53L0X): mounted on top of the sight gauge, measures distance to the puck and reports four states: LOW, BELOW_HALF, ABOVE_HALF, HIGH. Bidirectional notifications — get a heads-up when the tank passes half empty, plus refill confirmations at half and high marks.
+
+Most installs with a working liquid sight gauge use the XKC-Y25-V (digital). Dry mechanical-float gauges typically use either an IR break-beam (digital) or the VL53L0X (ToF).
 
 ### ESP32 Dev Board
 
@@ -59,6 +69,17 @@ Female-to-female Dupont jumpers connect the sensor's three leads directly to the
 | Yellow | GPIO4 / D4 (Pin 26) |
 
 Refer to the pin diagram above to locate the correct pins on your board.
+
+#### ToF Sensor Wiring (VL53L0X)
+
+| VL53L0X Pin | ESP32 Pin |
+|-------------|-----------|
+| VCC | 3V3 (Pin 1) |
+| GND | GND (Pin 38) |
+| SDA | GPIO21 (Pin 33) |
+| SCL | GPIO22 (Pin 36) |
+
+Mount the VL53L0X on top of the sight gauge looking down at the puck. The sensor reads distance in mm — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank).
 
 ### Assembled Hardware
 
@@ -90,6 +111,7 @@ arduino-cli core install esp32:esp32
 # Install libraries
 arduino-cli lib install "UniversalTelegramBot"
 arduino-cli lib install "ArduinoJson"
+arduino-cli lib install "Adafruit_VL53L0X"
 
 # Compile and upload
 arduino-cli compile --fqbn esp32:esp32:esp32 OilTankMonitor
@@ -106,7 +128,10 @@ Or use the [Arduino IDE](https://www.arduino.cc/en/software) — add the ESP32 b
 4. Enter your Telegram bot token and chat ID(s)
 5. Optionally configure a static IP instead of DHCP
 6. Set a web interface password (default: `admin` / `admin`)
-7. Click **Save & Restart**
+7. Under **Sensor Configuration**, choose your sensor type:
+   - **Digital threshold**: leave defaults — works with XKC-Y25-V, IR break-beam, etc. on GPIO4
+   - **ToF distance**: enter LOW, HALF, and HIGH thresholds in mm (defaults: 200/130/60). The page shows a live distance reading once the sensor is wired — use this to determine your install-specific values
+8. Click **Save & Restart**
 
 The device will reboot, connect to your WiFi, and send a Telegram message confirming it's online — including its IP address for future access to the settings page.
 
@@ -159,9 +184,16 @@ Returns:
   "ip": "192.168.1.100",
   "ssid": "YourNetwork",
   "uptime_sec": 3600,
-  "firmware": "1.1.0"
+  "firmware": "2.0.0",
+  "sensor_type": "tof",
+  "sensor_valid": true,
+  "level": "ABOVE_HALF",
+  "distance_mm": 110,
+  "thresholds": { "low": 200, "half": 130, "high": 60 }
 }
 ```
+
+For digital sensor installs: `sensor_type: "digital"`, `level: "LOW"` or `"HIGH"`, and `distance_mm` / `thresholds` are omitted. The legacy `oil_low` field is preserved across both sensor types for backward compatibility.
 
 ## Sensor Notes
 
