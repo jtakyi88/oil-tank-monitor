@@ -62,7 +62,7 @@ const int TOF_FAULT_CYCLES = 5;        // consecutive invalid reads → fault al
 const int TOF_RECOVERY_CYCLES = 3;     // consecutive invalid reads → I2C reinit attempt
 
 // ===== FIRMWARE VERSION =====
-const char* FW_VERSION = "1.1.0";
+const char* FW_VERSION = "2.0.0";
 
 // ===== AP MODE SETTINGS =====
 const char* AP_SSID     = "OilMonitor-Setup";
