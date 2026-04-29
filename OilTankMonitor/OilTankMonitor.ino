@@ -553,6 +553,15 @@ void handleRoot() {
   server.send(200, "text/html", buildConfigPage());
 }
 
+void sendValidationError(const String& message) {
+  String page = htmlHeader("Configuration Error");
+  page += "<h1>Configuration Error</h1>";
+  page += "<div class='status warn'>" + message + "</div>";
+  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
+  page += htmlFooter();
+  server.send(400, "text/html", page);
+}
+
 void handleSave() {
   if (!requireAuth()) return;
   cfgSSID     = server.arg("ssid");
@@ -575,6 +584,19 @@ void handleSave() {
   if (server.hasArg("tof_low"))  cfgTofLow  = server.arg("tof_low").toInt();
   if (server.hasArg("tof_half")) cfgTofHalf = server.arg("tof_half").toInt();
   if (server.hasArg("tof_high")) cfgTofHigh = server.arg("tof_high").toInt();
+
+  if (cfgSensorType == SENSOR_TOF) {
+    if (cfgTofHigh < TOF_MIN_MM || cfgTofHigh > TOF_MAX_MM ||
+        cfgTofHalf < TOF_MIN_MM || cfgTofHalf > TOF_MAX_MM ||
+        cfgTofLow  < TOF_MIN_MM || cfgTofLow  > TOF_MAX_MM) {
+      sendValidationError("Each ToF threshold must be between " + String(TOF_MIN_MM) + " and " + String(TOF_MAX_MM) + " mm.");
+      return;
+    }
+    if (!(cfgTofHigh < cfgTofHalf && cfgTofHalf < cfgTofLow)) {
+      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller mm = fuller tank). Got HIGH=" + String(cfgTofHigh) + " HALF=" + String(cfgTofHalf) + " LOW=" + String(cfgTofLow) + ".");
+      return;
+    }
+  }
 
   if (cfgSubnet.length() == 0) cfgSubnet = "255.255.255.0";
   if (cfgDNS.length() == 0)    cfgDNS = "8.8.8.8";
