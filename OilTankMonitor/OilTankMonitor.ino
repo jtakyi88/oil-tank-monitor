@@ -669,8 +669,13 @@ bool initSensor() {
     return true;
   }
   // ToF path — implemented in Task 4
-  Serial.println("Sensor: TOF init not yet implemented");
-  return false;
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  if (!tofSensor.begin()) {
+    Serial.println("Sensor: TOF init FAILED — check I2C wiring (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+    return false;
+  }
+  Serial.println("Sensor: TOF (VL53L0X) on I2C SDA=" + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+  return true;
 }
 
 SensorReading readSensorRaw() {
@@ -681,6 +686,17 @@ SensorReading readSensorRaw() {
     return r;
   }
   // ToF path — implemented in Task 4
+  VL53L0X_RangingMeasurementData_t data;
+  tofSensor.rangingTest(&data, false);
+  if (data.RangeStatus == 4) {       // out of range / no signal
+    return r;                         // r.valid stays false
+  }
+  uint16_t mm = data.RangeMilliMeter;
+  if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) {
+    return r;                         // out of accepted range
+  }
+  r.distanceMm = mm;
+  r.valid = true;
   return r;
 }
 
