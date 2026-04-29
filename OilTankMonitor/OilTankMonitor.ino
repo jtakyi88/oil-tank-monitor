@@ -109,6 +109,7 @@ uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
 
 LevelState currentState = LEVEL_UNKNOWN;
+SensorReading lastReading = { false, false, 0 };
 
 // Sensor state
 unsigned long lastAlertTime   = 0;
@@ -645,7 +646,18 @@ void handleStatus() {
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
-  json += "\"firmware\":\"" + String(FW_VERSION) + "\"";
+  json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
+  json += "\"sensor_type\":\"" + String(cfgSensorType == SENSOR_DIGITAL ? "digital" : "tof") + "\",";
+  json += "\"sensor_valid\":" + String(lastReading.valid ? "true" : "false") + ",";
+  json += "\"level\":\"" + String(levelStateName(currentState)) + "\"";
+  if (cfgSensorType == SENSOR_TOF) {
+    json += ",\"distance_mm\":" + String(lastReading.distanceMm);
+    json += ",\"thresholds\":{";
+    json += "\"low\":" + String(cfgTofLow) + ",";
+    json += "\"half\":" + String(cfgTofHalf) + ",";
+    json += "\"high\":" + String(cfgTofHigh);
+    json += "}";
+  }
   json += "}";
   server.send(200, "application/json", json);
 }
@@ -1006,6 +1018,8 @@ void loop() {
     lastSensorCheck = now;
 
     SensorReading reading = readSensor();
+    lastReading = reading;
+
     // Fault tracking — only meaningful for ToF (digital readSensor() returns valid=true always)
     if (cfgSensorType == SENSOR_TOF) {
       if (!reading.valid) {
