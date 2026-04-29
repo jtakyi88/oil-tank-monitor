@@ -221,7 +221,7 @@ String htmlHeader(const String& title) {
   h += ".toggle input{width:auto;}";
   h += ".status{background:#16213e;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #16c79a;}";
   h += ".status.warn{border-left-color:#e94560;}";
-  h += ".ip-fields{display:none;}.ip-fields.show{display:block;}";
+  h += ".ip-fields,.tof-fields{display:none;}.ip-fields.show,.tof-fields.show{display:block;}";
   h += "a{color:#16c79a;}";
   h += ".nav{margin:16px 0;font-size:0.9em;}";
   h += ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}";
@@ -289,6 +289,25 @@ String buildConfigPage() {
   page += "<button type='button' onclick=\"removeChatID(3)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
   page += "</div>";
 
+  // Sensor Configuration section
+  page += "<h2>Sensor Configuration</h2>";
+  page += "<label for='sensor_type'>Sensor Type</label>";
+  page += "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>";
+  page += "<option value='0'" + String(cfgSensorType == SENSOR_DIGITAL ? " selected" : "") + ">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>";
+  page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L0X)</option>";
+  page += "</select>";
+
+  page += "<div class='tof-fields" + String(cfgSensorType == SENSOR_TOF ? " show" : "") + "' id='tof-fields'>";
+  page += "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> mm</div>";
+  page += "<label for='tof_low'>LOW threshold (mm) — alert below this</label>";
+  page += "<input type='text' id='tof_low' name='tof_low' value='" + String(cfgTofLow) + "'>";
+  page += "<label for='tof_half'>HALF threshold (mm)</label>";
+  page += "<input type='text' id='tof_half' name='tof_half' value='" + String(cfgTofHalf) + "'>";
+  page += "<label for='tof_high'>HIGH threshold (mm) — refill complete above this</label>";
+  page += "<input type='text' id='tof_high' name='tof_high' value='" + String(cfgTofHigh) + "'>";
+  page += "<p style='font-size:0.85em;color:#999;'>Smaller mm = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm.</p>";
+  page += "</div>";
+
   // Network section
   page += "<h2>Network Settings</h2>";
   page += "<div class='toggle'>";
@@ -339,6 +358,10 @@ String buildConfigPage() {
   page += "function toggleStatic(){";
   page += "  document.getElementById('ip-fields').classList.toggle('show',";
   page += "    document.getElementById('static_ip').checked);}";
+  page += "function toggleTof(){";
+  page += "  var v=document.getElementById('sensor_type').value;";
+  page += "  document.getElementById('tof-fields').classList.toggle('show', v==='1');";
+  page += "}";
   page += "function toggleVis(id,btn){";
   page += "  var f=document.getElementById(id);";
   page += "  if(f.type==='password'){f.type='text';btn.style.opacity='0.5';}";
@@ -527,6 +550,15 @@ void handleSave() {
   cfgGateway  = server.arg("gateway");
   cfgSubnet   = server.arg("subnet");
   cfgDNS      = server.arg("dns");
+
+  // Sensor configuration
+  if (server.hasArg("sensor_type")) {
+    int t = server.arg("sensor_type").toInt();
+    cfgSensorType = (t == 1) ? SENSOR_TOF : SENSOR_DIGITAL;
+  }
+  if (server.hasArg("tof_low"))  cfgTofLow  = server.arg("tof_low").toInt();
+  if (server.hasArg("tof_half")) cfgTofHalf = server.arg("tof_half").toInt();
+  if (server.hasArg("tof_high")) cfgTofHigh = server.arg("tof_high").toInt();
 
   if (cfgSubnet.length() == 0) cfgSubnet = "255.255.255.0";
   if (cfgDNS.length() == 0)    cfgDNS = "8.8.8.8";
