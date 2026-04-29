@@ -865,6 +865,10 @@ void setup() {
     } else {
       apMode = false;
       initBot();
+      // If ToF init silently failed earlier, alert now that we have Telegram
+      if (cfgSensorType == SENSOR_TOF && !tofSensor.begin()) {
+        sendTelegram("⚠️ ToF init failed — check I2C wiring or switch sensor type via web UI.");
+      }
       // Take an initial sensor reading to establish currentState before announcing online.
       delay(200);  // let sensor stabilize
       SensorReading r = readSensor();
@@ -920,6 +924,28 @@ void loop() {
     lastSensorCheck = now;
 
     SensorReading reading = readSensor();
+    // Fault tracking — only meaningful for ToF (digital readSensor() returns valid=true always)
+    if (cfgSensorType == SENSOR_TOF) {
+      if (!reading.valid) {
+        tofInvalidCount++;
+        if (tofInvalidCount == TOF_RECOVERY_CYCLES) {
+          Serial.println("ToF: attempting I2C bus recovery");
+          Wire.end();
+          Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+          tofSensor.begin();
+        }
+        if (tofInvalidCount == TOF_FAULT_CYCLES && !sensorFaultActive) {
+          sensorFaultActive = true;
+          sendTelegram("⚠️ Sensor fault — no valid reading for 25s. Check wiring.");
+        }
+      } else {
+        if (sensorFaultActive) {
+          Serial.println("ToF: readings recovered");
+          sensorFaultActive = false;
+        }
+        tofInvalidCount = 0;
+      }
+    }
     LevelState newState = bucketReading(reading, currentState);
 
     if (currentState == LEVEL_UNKNOWN && newState != LEVEL_UNKNOWN) {
