@@ -576,27 +576,39 @@ void handleSave() {
   cfgSubnet   = server.arg("subnet");
   cfgDNS      = server.arg("dns");
 
-  // Sensor configuration
+  // Sensor configuration — stage into locals first, validate, then commit to globals.
+  // This prevents in-memory corruption if validation fails (NVS is also untouched on failure).
+  SensorType newSensorType = cfgSensorType;
+  uint16_t newTofLow  = cfgTofLow;
+  uint16_t newTofHalf = cfgTofHalf;
+  uint16_t newTofHigh = cfgTofHigh;
+
   if (server.hasArg("sensor_type")) {
     int t = server.arg("sensor_type").toInt();
-    cfgSensorType = (t == 1) ? SENSOR_TOF : SENSOR_DIGITAL;
+    newSensorType = (t == 1) ? SENSOR_TOF : SENSOR_DIGITAL;
   }
-  if (server.hasArg("tof_low"))  cfgTofLow  = server.arg("tof_low").toInt();
-  if (server.hasArg("tof_half")) cfgTofHalf = server.arg("tof_half").toInt();
-  if (server.hasArg("tof_high")) cfgTofHigh = server.arg("tof_high").toInt();
+  if (server.hasArg("tof_low"))  newTofLow  = server.arg("tof_low").toInt();
+  if (server.hasArg("tof_half")) newTofHalf = server.arg("tof_half").toInt();
+  if (server.hasArg("tof_high")) newTofHigh = server.arg("tof_high").toInt();
 
-  if (cfgSensorType == SENSOR_TOF) {
-    if (cfgTofHigh < TOF_MIN_MM || cfgTofHigh > TOF_MAX_MM ||
-        cfgTofHalf < TOF_MIN_MM || cfgTofHalf > TOF_MAX_MM ||
-        cfgTofLow  < TOF_MIN_MM || cfgTofLow  > TOF_MAX_MM) {
+  if (newSensorType == SENSOR_TOF) {
+    if (newTofHigh < TOF_MIN_MM || newTofHigh > TOF_MAX_MM ||
+        newTofHalf < TOF_MIN_MM || newTofHalf > TOF_MAX_MM ||
+        newTofLow  < TOF_MIN_MM || newTofLow  > TOF_MAX_MM) {
       sendValidationError("Each ToF threshold must be between " + String(TOF_MIN_MM) + " and " + String(TOF_MAX_MM) + " mm.");
       return;
     }
-    if (!(cfgTofHigh < cfgTofHalf && cfgTofHalf < cfgTofLow)) {
-      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller mm = fuller tank). Got HIGH=" + String(cfgTofHigh) + " HALF=" + String(cfgTofHalf) + " LOW=" + String(cfgTofLow) + ".");
+    if (!(newTofHigh < newTofHalf && newTofHalf < newTofLow)) {
+      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller mm = fuller tank). Got HIGH=" + String(newTofHigh) + " HALF=" + String(newTofHalf) + " LOW=" + String(newTofLow) + ".");
       return;
     }
   }
+
+  // Validation passed — commit to globals
+  cfgSensorType = newSensorType;
+  cfgTofLow  = newTofLow;
+  cfgTofHalf = newTofHalf;
+  cfgTofHigh = newTofHigh;
 
   if (cfgSubnet.length() == 0) cfgSubnet = "255.255.255.0";
   if (cfgDNS.length() == 0)    cfgDNS = "8.8.8.8";
