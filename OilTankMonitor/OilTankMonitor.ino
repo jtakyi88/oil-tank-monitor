@@ -865,7 +865,20 @@ void setup() {
     } else {
       apMode = false;
       initBot();
-      sendTelegram("🛢️ Oil tank monitor is ONLINE and watching the level.\nSettings: http://" + WiFi.localIP().toString());
+      // Take an initial sensor reading to establish currentState before announcing online.
+      delay(200);  // let sensor stabilize
+      SensorReading r = readSensor();
+      currentState = bucketReading(r, LEVEL_UNKNOWN);
+      Serial.printf("Boot: initial state=%s (after WiFi connect)\n", levelStateName(currentState));
+
+      String msg = "🛢️ Oil tank monitor is ONLINE.\nSensor: ";
+      msg += (cfgSensorType == SENSOR_DIGITAL ? "Digital" : "ToF");
+      msg += "\nLevel: " + String(levelStateName(currentState));
+      if (cfgSensorType == SENSOR_TOF && r.valid) {
+        msg += " (" + String(r.distanceMm) + "mm)";
+      }
+      msg += "\nSettings: http://" + WiFi.localIP().toString();
+      sendTelegram(msg);
     }
   }
 
