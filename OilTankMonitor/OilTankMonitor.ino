@@ -24,10 +24,12 @@
 #include <UniversalTelegramBot.h>
 #include <Update.h>
 #include <Wire.h>
-#include <Adafruit_VL53L0X.h>
+#include <Adafruit_VL53L1X.h>
+#include "esp_task_wdt.h"
 
 // ===== SENSOR ABSTRACTION =====
 enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
+enum TofChip { TOF_NONE, TOF_VL53L1X };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
@@ -58,11 +60,35 @@ const char* levelStateName(LevelState s) {
   return "UNKNOWN";
 }
 
+const char* sensorTypeJsonName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "tof";
+    case SENSOR_IR_BREAK: return "ir_break";
+    default:              return "digital";
+  }
+}
+
+const char* sensorTypeBootName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "TOF";
+    case SENSOR_IR_BREAK: return "IR_BREAK";
+    default:              return "DIGITAL";
+  }
+}
+
+const char* sensorTypeDisplayName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "ToF";
+    case SENSOR_IR_BREAK: return "IR break-beam (sight gauge)";
+    default:              return "Digital";
+  }
+}
+
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
-const int TOF_MIN_MM = 30;             // VL53L0X spec lower bound
-const int TOF_MAX_MM = 2000;           // VL53L0X spec upper bound (mm we accept)
+const int TOF_MIN_MM = 30;             // VL53L1X spec lower bound
+const int TOF_MAX_MM = 4000;           // VL53L1X long-mode upper bound
 const int TOF_FAULT_CYCLES = 5;        // consecutive invalid reads → fault alert
 const int TOF_RECOVERY_CYCLES = 3;     // consecutive invalid reads → I2C reinit attempt
 
@@ -112,6 +138,7 @@ SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgrad
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
+extern TofChip activeTofChip;   // defined with tofL1x near initTof()
 
 LevelState currentState = LEVEL_UNKNOWN;
 SensorReading lastReading = { false, false, 0 };
@@ -207,264 +234,323 @@ void saveSettings() {
 // HTML pages
 // =====================================================================
 
-String htmlHeader(const String& title) {
-  String h = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
-  h += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
-  h += "<title>" + title + "</title>";
-  h += "<style>";
-  h += "body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:20px;background:#1a1a2e;color:#e0e0e0;}";
-  h += ".container{max-width:480px;margin:0 auto;}";
-  h += "h1{color:#e94560;font-size:1.5em;border-bottom:2px solid #e94560;padding-bottom:8px;}";
-  h += "h2{color:#0f3460;font-size:1.1em;margin-top:24px;color:#16c79a;}";
-  h += "label{display:block;margin:12px 0 4px;font-weight:600;font-size:0.9em;}";
-  h += "input[type=text],input[type=password]{width:100%;padding:10px;border:1px solid #333;border-radius:6px;";
-  h += "  box-sizing:border-box;font-size:1em;background:#16213e;color:#e0e0e0;}";
-  h += "input:focus{outline:none;border-color:#e94560;}";
-  h += "button{background:#e94560;color:#fff;border:none;padding:12px 24px;border-radius:6px;";
-  h += "  font-size:1em;cursor:pointer;margin-top:20px;width:100%;}";
-  h += "button:hover{background:#c81e45;}";
-  h += ".toggle{display:flex;align-items:center;gap:10px;margin:12px 0;}";
-  h += ".toggle input{width:auto;}";
-  h += ".status{background:#16213e;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #16c79a;}";
-  h += ".status.warn{border-left-color:#e94560;}";
-  h += ".ip-fields,.tof-fields{display:none;}.ip-fields.show,.tof-fields.show{display:block;}";
-  h += "a{color:#16c79a;}";
-  h += ".nav{margin:16px 0;font-size:0.9em;}";
-  h += ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}";
-  h += "</style></head><body><div class='container'>";
-  return h;
+
+
+void streamHtmlHeader(const String& title) {
+  server.sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                       "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                       "<title>"));
+  server.sendContent(title);
+  server.sendContent(F("</title><style>"
+                       "body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:20px;background:#1a1a2e;color:#e0e0e0;}"
+                       ".container{max-width:480px;margin:0 auto;}"
+                       "h1{color:#e94560;font-size:1.5em;border-bottom:2px solid #e94560;padding-bottom:8px;}"
+                       "h2{color:#0f3460;font-size:1.1em;margin-top:24px;color:#16c79a;}"
+                       "label{display:block;margin:12px 0 4px;font-weight:600;font-size:0.9em;}"
+                       "input[type=text],input[type=password]{width:100%;padding:10px;border:1px solid #333;border-radius:6px;"
+                       "  box-sizing:border-box;font-size:1em;background:#16213e;color:#e0e0e0;}"
+                       "input:focus{outline:none;border-color:#e94560;}"
+                       "button{background:#e94560;color:#fff;border:none;padding:12px 24px;border-radius:6px;"
+                       "  font-size:1em;cursor:pointer;margin-top:20px;width:100%;}"
+                       "button:hover{background:#c81e45;}"
+                       ".toggle{display:flex;align-items:center;gap:10px;margin:12px 0;}"
+                       ".toggle input{width:auto;}"
+                       ".status{background:#16213e;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #16c79a;}"
+                       ".status.warn{border-left-color:#e94560;}"
+                       ".ip-fields,.tof-fields{display:none;}.ip-fields.show,.tof-fields.show{display:block;}"
+                       "a{color:#16c79a;}"
+                       ".nav{margin:16px 0;font-size:0.9em;}"
+                       ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}"
+                       "</style></head><body><div class='container'>"));
 }
 
-String htmlFooter() {
-  return "</div></body></html>";
+void streamHtmlFooter() {
+  server.sendContent(F("</div></body></html>"));
 }
 
-String buildConfigPage() {
-  String page = htmlHeader("Oil Tank Monitor - Settings");
+// HTTP chunked transfer encoding interprets a zero-length chunk as end-of-response,
+// so an empty String passed to server.sendContent() truncates the page mid-render.
+// streamDyn skips empty strings — safe drop-in for any user-supplied / optional config field.
+inline void streamDyn(const String& s) {
+  if (s.length() > 0) server.sendContent(s);
+}
+
+
+void streamConfigPage() {
+  streamHtmlHeader("Oil Tank Monitor - Settings");
 
   // Status section
   if (!apMode && WiFi.status() == WL_CONNECTED) {
-    page += "<div class='status'>";
-    page += "<strong>Status:</strong> Connected to <em>" + cfgSSID + "</em><br>";
-    page += "<strong>IP:</strong> " + WiFi.localIP().toString() + "<br>";
-    page += "<strong>Oil Level:</strong> " + String(oilIsLow ? "LOW" : "OK") + "<br>";
-    page += "<strong>Firmware:</strong> v" + String(FW_VERSION);
-    page += "</div>";
+    server.sendContent(F("<div class='status'>"
+                         "<strong>Status:</strong> Connected to <em>"));
+    streamDyn(cfgSSID);
+    server.sendContent(F("</em><br>"
+                         "<strong>IP:</strong> "));
+    server.sendContent(WiFi.localIP().toString());
+    server.sendContent(F("<br>"
+                         "<strong>Oil Level:</strong> "));
+    server.sendContent(oilIsLow ? F("LOW") : F("OK"));
+    server.sendContent(F("<br>"
+                         "<strong>Firmware:</strong> v"));
+    server.sendContent(FW_VERSION);
+    server.sendContent(F("</div>"));
   } else if (apMode) {
-    page += "<div class='status warn'>";
-    page += "<strong>Setup Mode</strong> — Configure your settings below, then the device will connect to your WiFi.";
-    page += "</div>";
+    server.sendContent(F("<div class='status warn'>"
+                         "<strong>Setup Mode</strong> — Configure your settings below, then the device will connect to your WiFi."
+                         "</div>"));
   }
 
-  page += "<h1>Oil Tank Monitor</h1>";
-  page += "<form method='POST' action='/save'>";
-
-  // WiFi section
-  page += "<h2>WiFi Network</h2>";
-  page += "<label for='ssid'>SSID (Network Name)</label>";
-  page += "<input type='text' id='ssid' name='ssid' value='" + cfgSSID + "' required>";
-  page += "<label for='password'>Password</label>";
-  page += "<input type='password' id='password' name='password' value='" + cfgPassword + "'>";
-
-  // Telegram section
-  page += "<h2>Telegram Notifications</h2>";
-  page += "<label for='bot_token'>Bot Token</label>";
-  page += "<div style='display:flex;gap:8px;align-items:center;'>";
-  page += "<input type='password' id='bot_token' name='bot_token' value='" + cfgBotToken + "' placeholder='123456789:ABCdef...' required style='flex:1;'>";
-  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('bot_token',this)\">&#128065;</button>";
-  page += "</div>";
-  page += "<label for='chat_id'>Chat ID</label>";
-  page += "<div style='display:flex;gap:8px;align-items:center;'>";
-  page += "<input type='password' id='chat_id' name='chat_id' value='" + cfgChatID + "' placeholder='123456789' required style='flex:1;'>";
-  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id',this)\">&#128065;</button>";
-  page += "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>";
-  page += "</div>";
-
-  // Chat ID 2 (hidden if empty)
-  page += "<div id='chat2-row' style='display:" + String(cfgChatID2.length() > 0 ? "flex" : "none") + ";gap:8px;align-items:center;margin-top:8px;'>";
-  page += "<input type='password' id='chat_id2' name='chat_id2' value='" + cfgChatID2 + "' placeholder='Chat ID 2 (optional)' style='flex:1;'>";
-  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id2',this)\">&#128065;</button>";
-  page += "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>";
-  page += "<button type='button' onclick=\"removeChatID(2)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
-  page += "</div>";
-
-  // Chat ID 3 (hidden if empty)
-  page += "<div id='chat3-row' style='display:" + String(cfgChatID3.length() > 0 ? "flex" : "none") + ";gap:8px;align-items:center;margin-top:8px;'>";
-  page += "<input type='password' id='chat_id3' name='chat_id3' value='" + cfgChatID3 + "' placeholder='Chat ID 3 (optional)' style='flex:1;'>";
-  page += "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id3',this)\">&#128065;</button>";
-  page += "<button type='button' onclick=\"removeChatID(3)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
-  page += "</div>";
-
-  // Sensor Configuration section
-  page += "<h2>Sensor Configuration</h2>";
-  page += "<label for='sensor_type'>Sensor Type</label>";
-  page += "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>";
-  page += "<option value='0'" + String(cfgSensorType == SENSOR_DIGITAL ? " selected" : "") + ">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>";
-  page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L0X)</option>";
-  page += "<option value='2'" + String(cfgSensorType == SENSOR_IR_BREAK ? " selected" : "") + ">IR break-beam (sight gauge puck)</option>";
-  page += "</select>";
-
-  page += "<div class='tof-fields" + String(cfgSensorType == SENSOR_TOF ? " show" : "") + "' id='tof-fields'>";
-  page += "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> mm</div>";
-  page += "<label for='tof_low'>LOW threshold (mm) — alert below this</label>";
-  page += "<input type='text' id='tof_low' name='tof_low' value='" + String(cfgTofLow) + "'>";
-  page += "<label for='tof_half'>HALF threshold (mm)</label>";
-  page += "<input type='text' id='tof_half' name='tof_half' value='" + String(cfgTofHalf) + "'>";
-  page += "<label for='tof_high'>HIGH threshold (mm) — refill complete above this</label>";
-  page += "<input type='text' id='tof_high' name='tof_high' value='" + String(cfgTofHigh) + "'>";
-  page += "<p style='font-size:0.85em;color:#999;'>Smaller mm = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm.</p>";
-  page += "</div>";
-
-  // Network section
-  page += "<h2>Network Settings</h2>";
-  page += "<div class='toggle'>";
-  page += "<input type='checkbox' id='static_ip' name='static_ip' value='1'";
-  if (cfgStaticIP) page += " checked";
-  page += " onchange='toggleStatic()'>";
-  page += "<label for='static_ip' style='display:inline;margin:0;'>Use Static IP (instead of DHCP)</label>";
-  page += "</div>";
-
-  page += "<div class='ip-fields" + String(cfgStaticIP ? " show" : "") + "' id='ip-fields'>";
-  page += "<label for='ip'>IP Address</label>";
-  page += "<input type='text' id='ip' name='ip' value='" + cfgIP + "' placeholder='192.168.1.100'>";
-  page += "<label for='gateway'>Gateway</label>";
-  page += "<input type='text' id='gateway' name='gateway' value='" + cfgGateway + "' placeholder='192.168.1.1'>";
-  page += "<label for='subnet'>Subnet Mask</label>";
-  page += "<input type='text' id='subnet' name='subnet' value='" + cfgSubnet + "' placeholder='255.255.255.0'>";
-  page += "<label for='dns'>DNS Server</label>";
-  page += "<input type='text' id='dns' name='dns' value='" + cfgDNS + "' placeholder='8.8.8.8'>";
-  page += "</div>";
-
-  // Web interface password section
-  page += "<h2>Web Interface Password</h2>";
-  page += "<label>Username</label>";
-  page += "<input type='text' value='admin' disabled style='opacity:0.6;'>";
-  page += "<label for='web_pass'>Password</label>";
-  page += "<input type='password' id='web_pass' name='web_pass' value='" + cfgWebPassword + "'>";
-
-  page += "<button type='submit'>Save &amp; Restart</button>";
-  page += "</form>";
-
-  // Firmware update link
-  page += "<h2>Firmware</h2>";
-  page += "<p style='font-size:0.9em;'>Current version: <strong>v" + String(FW_VERSION) + "</strong></p>";
-  page += "<a href='/update' style='display:block;text-align:center;padding:12px;background:#0f3460;";
-  page += "border-radius:6px;color:#e0e0e0;text-decoration:none;'>Upload Firmware Update</a>";
-
-  // Logout and danger zone
-  page += "<div style='margin-top:24px;text-align:center;'>";
-  page += "<a href='/logout' style='color:#e0e0e0;font-size:0.9em;'>Log Out</a>";
-  page += "</div>";
-
-  page += "<h2 style='margin-top:40px;color:#e94560;'>Danger Zone</h2>";
-  page += "<button style='background:#333;border:1px solid #e94560;' ";
-  page += "onclick=\"if(confirm('Are you sure you want to factory reset? This will erase ALL settings (WiFi, Telegram, network) and reboot into setup mode.')){window.location='/factory-reset'}\">";
-  page += "Factory Reset</button>";
-
-  page += "<script>";
-  page += "function toggleStatic(){";
-  page += "  document.getElementById('ip-fields').classList.toggle('show',";
-  page += "    document.getElementById('static_ip').checked);}";
-  page += "function toggleTof(){";
-  page += "  var v=document.getElementById('sensor_type').value;";
-  page += "  document.getElementById('tof-fields').classList.toggle('show', v==='1');";
-  page += "}";
-  page += "var tofPoll=null;";
-  page += "function startTofPoll(){";
-  page += "  if(tofPoll) clearInterval(tofPoll);";
-  page += "  tofPoll=setInterval(function(){";
-  page += "    if(document.getElementById('sensor_type').value!=='1'){clearInterval(tofPoll);tofPoll=null;return;}";
-  page += "    fetch('/status').then(r=>r.json()).then(j=>{";
-  page += "      var el=document.getElementById('tof-distance');";
-  page += "      if(el && j.distance_mm!==undefined){el.textContent=j.distance_mm;}";
-  page += "      else if(el){el.textContent='—';}";
-  page += "    }).catch(()=>{});";
-  page += "  },2000);";
-  page += "}";
-  page += "if(document.getElementById('sensor_type').value==='1'){startTofPoll();}";
-  page += "document.getElementById('sensor_type').addEventListener('change',function(){";
-  page += "  if(this.value==='1') startTofPoll();";
-  page += "});";
-  page += "function toggleVis(id,btn){";
-  page += "  var f=document.getElementById(id);";
-  page += "  if(f.type==='password'){f.type='text';btn.style.opacity='0.5';}";
-  page += "  else{f.type='password';btn.style.opacity='1';}}";
-  page += "function addChatID(){";
-  page += "  var r2=document.getElementById('chat2-row');";
-  page += "  var r3=document.getElementById('chat3-row');";
-  page += "  if(r2.style.display==='none'){r2.style.display='flex';}";
-  page += "  else if(r3.style.display==='none'){r3.style.display='flex';}";
-  page += "}";
-  page += "function removeChatID(n){";
-  page += "  var r=document.getElementById('chat'+n+'-row');";
-  page += "  r.style.display='none';";
-  page += "  document.getElementById('chat_id'+n).value='';";
-  page += "}";
-  page += "</script>";
-
-  page += htmlFooter();
-  return page;
+  server.sendContent(F("<h1>Oil Tank Monitor</h1>"
+                       "<form method='POST' action='/save'>"
+                       // WiFi section
+                       "<h2>WiFi Network</h2>"
+                       "<label for='ssid'>SSID (Network Name)</label>"
+                       "<input type='text' id='ssid' name='ssid' value='"));
+  streamDyn(cfgSSID);
+  server.sendContent(F("' required>"
+                       "<label for='password'>Password</label>"
+                       "<input type='password' id='password' name='password' value='"));
+  streamDyn(cfgPassword);
+  server.sendContent(F("'>"
+                       // Telegram section
+                       "<h2>Telegram Notifications</h2>"
+                       "<label for='bot_token'>Bot Token</label>"
+                       "<div style='display:flex;gap:8px;align-items:center;'>"
+                       "<input type='password' id='bot_token' name='bot_token' value='"));
+  streamDyn(cfgBotToken);
+  server.sendContent(F("' placeholder='123456789:ABCdef...' required style='flex:1;'>"
+                       "<button type='button' class='eye-btn' onclick=\"toggleVis('bot_token',this)\">&#128065;</button>"
+                       "</div>"
+                       "<label for='chat_id'>Chat ID</label>"
+                       "<div style='display:flex;gap:8px;align-items:center;'>"
+                       "<input type='password' id='chat_id' name='chat_id' value='"));
+  streamDyn(cfgChatID);
+  server.sendContent(F("' placeholder='123456789' required style='flex:1;'>"
+                       "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id',this)\">&#128065;</button>"
+                       "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>"
+                       "</div>"
+                       // Chat ID 2
+                       "<div id='chat2-row' style='display:"));
+  server.sendContent(cfgChatID2.length() > 0 ? F("flex") : F("none"));
+  server.sendContent(F(";gap:8px;align-items:center;margin-top:8px;'>"
+                       "<input type='password' id='chat_id2' name='chat_id2' value='"));
+  streamDyn(cfgChatID2);
+  server.sendContent(F("' placeholder='Chat ID 2 (optional)' style='flex:1;'>"
+                       "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id2',this)\">&#128065;</button>"
+                       "<button type='button' onclick=\"addChatID()\" style='width:40px;padding:10px;margin-top:0;background:#16c79a;font-size:1.2em;'>+</button>"
+                       "<button type='button' onclick=\"removeChatID(2)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>"
+                       "</div>"
+                       // Chat ID 3
+                       "<div id='chat3-row' style='display:"));
+  server.sendContent(cfgChatID3.length() > 0 ? F("flex") : F("none"));
+  server.sendContent(F(";gap:8px;align-items:center;margin-top:8px;'>"
+                       "<input type='password' id='chat_id3' name='chat_id3' value='"));
+  streamDyn(cfgChatID3);
+  server.sendContent(F("' placeholder='Chat ID 3 (optional)' style='flex:1;'>"
+                       "<button type='button' class='eye-btn' onclick=\"toggleVis('chat_id3',this)\">&#128065;</button>"
+                       "<button type='button' onclick=\"removeChatID(3)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>"
+                       "</div>"
+                       // Sensor Configuration
+                       "<h2>Sensor Configuration</h2>"
+                       "<label for='sensor_type'>Sensor Type</label>"
+                       "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>"
+                       "<option value='0'"));
+  if (cfgSensorType == SENSOR_DIGITAL) server.sendContent(F(" selected"));
+  server.sendContent(F(">Digital threshold (XKC-Y25-V)</option>"
+                       "<option value='1'"));
+  if (cfgSensorType == SENSOR_TOF) server.sendContent(F(" selected"));
+  server.sendContent(F(">ToF distance (VL53L1X)</option>"
+                       "<option value='2'"));
+  if (cfgSensorType == SENSOR_IR_BREAK) server.sendContent(F(" selected"));
+  server.sendContent(F(">IR break-beam (sight gauge puck)</option>"
+                       "</select>"
+                       "<div class='tof-fields"));
+  if (cfgSensorType == SENSOR_TOF) server.sendContent(F(" show"));
+  server.sendContent(F("' id='tof-fields'>"
+                       "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> mm</div>"
+                       "<label for='tof_low'>LOW threshold (mm) — alert below this</label>"
+                       "<input type='text' id='tof_low' name='tof_low' value='"));
+  server.sendContent(String(cfgTofLow));
+  server.sendContent(F("'>"
+                       "<label for='tof_half'>HALF threshold (mm)</label>"
+                       "<input type='text' id='tof_half' name='tof_half' value='"));
+  server.sendContent(String(cfgTofHalf));
+  server.sendContent(F("'>"
+                       "<label for='tof_high'>HIGH threshold (mm) — refill complete above this</label>"
+                       "<input type='text' id='tof_high' name='tof_high' value='"));
+  server.sendContent(String(cfgTofHigh));
+  server.sendContent(F("'>"
+                       "<p style='font-size:0.85em;color:#999;'>Smaller mm = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm.</p>"
+                       "</div>"
+                       // Network
+                       "<h2>Network Settings</h2>"
+                       "<div class='toggle'>"
+                       "<input type='checkbox' id='static_ip' name='static_ip' value='1'"));
+  if (cfgStaticIP) server.sendContent(F(" checked"));
+  server.sendContent(F(" onchange='toggleStatic()'>"
+                       "<label for='static_ip' style='display:inline;margin:0;'>Use Static IP (instead of DHCP)</label>"
+                       "</div>"
+                       "<div class='ip-fields"));
+  if (cfgStaticIP) server.sendContent(F(" show"));
+  server.sendContent(F("' id='ip-fields'>"
+                       "<label for='ip'>IP Address</label>"
+                       "<input type='text' id='ip' name='ip' value='"));
+  streamDyn(cfgIP);
+  server.sendContent(F("' placeholder='192.168.1.100'>"
+                       "<label for='gateway'>Gateway</label>"
+                       "<input type='text' id='gateway' name='gateway' value='"));
+  streamDyn(cfgGateway);
+  server.sendContent(F("' placeholder='192.168.1.1'>"
+                       "<label for='subnet'>Subnet Mask</label>"
+                       "<input type='text' id='subnet' name='subnet' value='"));
+  streamDyn(cfgSubnet);
+  server.sendContent(F("' placeholder='255.255.255.0'>"
+                       "<label for='dns'>DNS Server</label>"
+                       "<input type='text' id='dns' name='dns' value='"));
+  streamDyn(cfgDNS);
+  server.sendContent(F("' placeholder='8.8.8.8'>"
+                       "</div>"
+                       // Web interface password
+                       "<h2>Web Interface Password</h2>"
+                       "<label>Username</label>"
+                       "<input type='text' value='admin' disabled style='opacity:0.6;'>"
+                       "<label for='web_pass'>Password</label>"
+                       "<input type='password' id='web_pass' name='web_pass' value='"));
+  streamDyn(cfgWebPassword);
+  server.sendContent(F("'>"
+                       "<button type='submit'>Save &amp; Restart</button>"
+                       "</form>"
+                       // Firmware update link
+                       "<h2>Firmware</h2>"
+                       "<p style='font-size:0.9em;'>Current version: <strong>v"));
+  server.sendContent(FW_VERSION);
+  server.sendContent(F("</strong></p>"
+                       "<a href='/update' style='display:block;text-align:center;padding:12px;background:#0f3460;"
+                       "border-radius:6px;color:#e0e0e0;text-decoration:none;'>Upload Firmware Update</a>"
+                       // Logout and danger zone
+                       "<div style='margin-top:24px;text-align:center;'>"
+                       "<a href='/logout' style='color:#e0e0e0;font-size:0.9em;'>Log Out</a>"
+                       "</div>"
+                       "<h2 style='margin-top:40px;color:#e94560;'>Danger Zone</h2>"
+                       "<button style='background:#333;border:1px solid #e94560;' "
+                       "onclick=\"if(confirm('Are you sure you want to factory reset? This will erase ALL settings (WiFi, Telegram, network) and reboot into setup mode.')){window.location='/factory-reset'}\">"
+                       "Factory Reset</button>"
+                       "<script>"
+                       "function toggleStatic(){"
+                       "  document.getElementById('ip-fields').classList.toggle('show',"
+                       "    document.getElementById('static_ip').checked);}"
+                       "function toggleTof(){"
+                       "  var v=document.getElementById('sensor_type').value;"
+                       "  document.getElementById('tof-fields').classList.toggle('show', v==='1');"
+                       "}"
+                       "var tofPoll=null;"
+                       "function startTofPoll(){"
+                       "  if(tofPoll) clearInterval(tofPoll);"
+                       "  tofPoll=setInterval(function(){"
+                       "    if(document.getElementById('sensor_type').value!=='1'){clearInterval(tofPoll);tofPoll=null;return;}"
+                       "    fetch('/status').then(r=>r.json()).then(j=>{"
+                       "      var el=document.getElementById('tof-distance');"
+                       "      if(el && j.distance_mm!==undefined){el.textContent=j.distance_mm;}"
+                       "      else if(el){el.textContent='—';}"
+                       "    }).catch(()=>{});"
+                       "  },2000);"
+                       "}"
+                       "if(document.getElementById('sensor_type').value==='1'){startTofPoll();}"
+                       "document.getElementById('sensor_type').addEventListener('change',function(){"
+                       "  if(this.value==='1') startTofPoll();"
+                       "});"
+                       "function toggleVis(id,btn){"
+                       "  var f=document.getElementById(id);"
+                       "  if(f.type==='password'){f.type='text';btn.style.opacity='0.5';}"
+                       "  else{f.type='password';btn.style.opacity='1';}}"
+                       "function addChatID(){"
+                       "  var r2=document.getElementById('chat2-row');"
+                       "  var r3=document.getElementById('chat3-row');"
+                       "  if(r2.style.display==='none'){r2.style.display='flex';}"
+                       "  else if(r3.style.display==='none'){r3.style.display='flex';}"
+                       "}"
+                       "function removeChatID(n){"
+                       "  var r=document.getElementById('chat'+n+'-row');"
+                       "  r.style.display='none';"
+                       "  document.getElementById('chat_id'+n).value='';"
+                       "}"
+                       "</script>"));
+  streamHtmlFooter();
 }
 
-String buildSavedPage() {
+
+void streamSavedPage() {
   String targetIP = cfgStaticIP && cfgIP.length() > 0 ? cfgIP : WiFi.localIP().toString();
   String targetURL = "http://" + targetIP;
 
-  String page = htmlHeader("Settings Saved");
-  page += "<h1>Settings Saved</h1>";
-  page += "<div class='status'>";
-  page += "Configuration saved. The device is restarting and connecting to <strong>" + cfgSSID + "</strong>.<br><br>";
-  page += "Redirecting to <strong>" + targetURL + "</strong> in <span id='countdown'>15</span> seconds...";
-  page += "</div>";
-  page += "<script>";
-  page += "var sec=15;var el=document.getElementById('countdown');";
-  page += "var t=setInterval(function(){sec--;el.textContent=sec;";
-  page += "if(sec<=0){clearInterval(t);window.location='" + targetURL + "';}";
-  page += "},1000);";
-  page += "</script>";
-  page += htmlFooter();
-  return page;
+  streamHtmlHeader("Settings Saved");
+  server.sendContent(F("<h1>Settings Saved</h1>"
+                       "<div class='status'>"
+                       "Configuration saved. The device is restarting and connecting to <strong>"));
+  streamDyn(cfgSSID);
+  server.sendContent(F("</strong>.<br><br>"
+                       "Redirecting to <strong>"));
+  server.sendContent(targetURL);
+  server.sendContent(F("</strong> in <span id='countdown'>15</span> seconds..."
+                       "</div>"
+                       "<script>"
+                       "var sec=15;var el=document.getElementById('countdown');"
+                       "var t=setInterval(function(){sec--;el.textContent=sec;"
+                       "if(sec<=0){clearInterval(t);window.location='"));
+  server.sendContent(targetURL);
+  server.sendContent(F("';}"
+                       "},1000);"
+                       "</script>"));
+  streamHtmlFooter();
 }
 
-String buildUpdatePage() {
-  String page = htmlHeader("Firmware Update");
-  page += "<h1>Firmware Update</h1>";
-  page += "<div class='status'>";
-  page += "<strong>Current Version:</strong> v" + String(FW_VERSION) + "<br>";
-  page += "<strong>Free Space:</strong> " + String(ESP.getFreeSketchSpace() / 1024) + " KB";
-  page += "</div>";
-  page += "<p style='font-size:0.9em;'>Upload a compiled <code>.bin</code> firmware file. The device will flash itself and reboot.</p>";
-  page += "<form method='POST' action='/update' enctype='multipart/form-data'>";
-  page += "<label for='firmware'>Firmware File (.bin)</label>";
-  page += "<input type='file' id='firmware' name='firmware' accept='.bin' required ";
-  page += "style='padding:10px;background:#16213e;border:1px solid #333;border-radius:6px;width:100%;box-sizing:border-box;'>";
-  page += "<button type='submit' onclick=\"this.innerText='Uploading... do not power off';this.disabled=true;this.form.submit();\">Upload &amp; Install</button>";
-  page += "</form>";
-  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
-  page += htmlFooter();
-  return page;
+
+void streamUpdatePage() {
+  streamHtmlHeader("Firmware Update");
+  server.sendContent(F("<h1>Firmware Update</h1>"
+                       "<div class='status'>"
+                       "<strong>Current Version:</strong> v"));
+  server.sendContent(FW_VERSION);
+  server.sendContent(F("<br>"
+                       "<strong>Free Space:</strong> "));
+  server.sendContent(String(ESP.getFreeSketchSpace() / 1024));
+  server.sendContent(F(" KB"
+                       "</div>"
+                       "<p style='font-size:0.9em;'>Upload a compiled <code>.bin</code> firmware file. The device will flash itself and reboot.</p>"
+                       "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                       "<label for='firmware'>Firmware File (.bin)</label>"
+                       "<input type='file' id='firmware' name='firmware' accept='.bin' required "
+                       "style='padding:10px;background:#16213e;border:1px solid #333;border-radius:6px;width:100%;box-sizing:border-box;'>"
+                       "<button type='submit' onclick=\"this.innerText='Uploading... do not power off';this.disabled=true;this.form.submit();\">Upload &amp; Install</button>"
+                       "</form>"
+                       "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>"));
+  streamHtmlFooter();
 }
 
-String buildUpdateResultPage(bool success, const String& message) {
-  String page = htmlHeader("Update " + String(success ? "Complete" : "Failed"));
-  page += "<h1>Firmware Update " + String(success ? "Complete" : "Failed") + "</h1>";
-  page += "<div class='status" + String(success ? "" : " warn") + "'>";
-  page += message;
+
+void streamUpdateResultPage(bool success, const String& message) {
+  streamHtmlHeader(String("Update ") + (success ? "Complete" : "Failed"));
+  server.sendContent(F("<h1>Firmware Update "));
+  server.sendContent(success ? F("Complete") : F("Failed"));
+  server.sendContent(F("</h1>"
+                       "<div class='status"));
+  if (!success) server.sendContent(F(" warn"));
+  server.sendContent(F("'>"));
+  server.sendContent(message);
   if (success) {
-    page += "<br><br>Redirecting in <span id='countdown'>15</span> seconds...";
-    page += "</div>";
-    page += "<script>";
-    page += "var sec=15;var el=document.getElementById('countdown');";
-    page += "var t=setInterval(function(){sec--;el.textContent=sec;";
-    page += "if(sec<=0){clearInterval(t);window.location='/';}";
-    page += "},1000);";
-    page += "</script>";
+    server.sendContent(F("<br><br>Redirecting in <span id='countdown'>15</span> seconds..."
+                         "</div>"
+                         "<script>"
+                         "var sec=15;var el=document.getElementById('countdown');"
+                         "var t=setInterval(function(){sec--;el.textContent=sec;"
+                         "if(sec<=0){clearInterval(t);window.location='/';}"
+                         "},1000);"
+                         "</script>"));
   } else {
-    page += "</div>";
-    page += "<div class='nav' style='margin-top:16px;'><a href='/update'>&larr; Try Again</a></div>";
+    server.sendContent(F("</div>"
+                         "<div class='nav' style='margin-top:16px;'><a href='/update'>&larr; Try Again</a></div>"));
   }
-  page += htmlFooter();
-  return page;
+  streamHtmlFooter();
 }
 
 // =====================================================================
@@ -510,21 +596,21 @@ bool requireAuth() {
   return true;
 }
 
-String buildLoginPage(bool failed) {
-  String page = htmlHeader("Oil Tank Monitor - Login");
-  page += "<h1>Oil Tank Monitor</h1>";
+
+void streamLoginPage(bool failed) {
+  streamHtmlHeader("Oil Tank Monitor - Login");
+  server.sendContent(F("<h1>Oil Tank Monitor</h1>"));
   if (failed) {
-    page += "<div class='status warn'>Invalid password. Try again.</div>";
+    server.sendContent(F("<div class='status warn'>Invalid password. Try again.</div>"));
   }
-  page += "<form method='POST' action='/login'>";
-  page += "<label for='username'>Username</label>";
-  page += "<input type='text' id='username' value='admin' disabled style='opacity:0.6;'>";
-  page += "<label for='password'>Password</label>";
-  page += "<input type='password' id='password' name='password' autofocus required>";
-  page += "<button type='submit'>Log In</button>";
-  page += "</form>";
-  page += htmlFooter();
-  return page;
+  server.sendContent(F("<form method='POST' action='/login'>"
+                       "<label for='username'>Username</label>"
+                       "<input type='text' id='username' value='admin' disabled style='opacity:0.6;'>"
+                       "<label for='password'>Password</label>"
+                       "<input type='password' id='password' name='password' autofocus required>"
+                       "<button type='submit'>Log In</button>"
+                       "</form>"));
+  streamHtmlFooter();
 }
 
 // =====================================================================
@@ -542,10 +628,14 @@ void handleLogin() {
       server.send(302, "text/plain", "Login successful");
       return;
     }
-    server.send(200, "text/html", buildLoginPage(true));
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+    streamLoginPage(true);
     return;
   }
-  server.send(200, "text/html", buildLoginPage(false));
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamLoginPage(false);
 }
 
 void handleLogout() {
@@ -557,16 +647,21 @@ void handleLogout() {
 
 void handleRoot() {
   if (!requireAuth()) return;
-  server.send(200, "text/html", buildConfigPage());
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamConfigPage();
 }
 
 void sendValidationError(const String& message) {
-  String page = htmlHeader("Configuration Error");
-  page += "<h1>Configuration Error</h1>";
-  page += "<div class='status warn'>" + message + "</div>";
-  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
-  page += htmlFooter();
-  server.send(400, "text/html", page);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(400, "text/html", "");
+  streamHtmlHeader("Configuration Error");
+  server.sendContent(F("<h1>Configuration Error</h1>"
+                       "<div class='status warn'>"));
+  server.sendContent(message);
+  server.sendContent(F("</div>"
+                       "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>"));
+  streamHtmlFooter();
 }
 
 void handleSave() {
@@ -626,22 +721,29 @@ void handleSave() {
   if (newPass.length() > 0) cfgWebPassword = newPass;
 
   saveSettings();
-  server.send(200, "text/html", buildSavedPage());
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamSavedPage();
   delay(2000);
   ESP.restart();
 }
 
 void handleFactoryReset() {
   if (!requireAuth()) return;
-  String page = htmlHeader("Factory Reset");
-  page += "<h1>Factory Reset Complete</h1>";
-  page += "<div class='status warn'>";
-  page += "All settings have been erased. The device is rebooting into setup mode.<br><br>";
-  page += "Connect to WiFi <strong>" + String(AP_SSID) + "</strong> (password: <strong>" + String(AP_PASSWORD) + "</strong>)<br>";
-  page += "Then open <strong>http://192.168.4.1</strong> to reconfigure.";
-  page += "</div>";
-  page += htmlFooter();
-  server.send(200, "text/html", page);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamHtmlHeader("Factory Reset");
+  server.sendContent(F("<h1>Factory Reset Complete</h1>"
+                       "<div class='status warn'>"
+                       "All settings have been erased. The device is rebooting into setup mode.<br><br>"
+                       "Connect to WiFi <strong>"));
+  server.sendContent(AP_SSID);
+  server.sendContent(F("</strong> (password: <strong>"));
+  server.sendContent(AP_PASSWORD);
+  server.sendContent(F("</strong>)<br>"
+                       "Then open <strong>http://192.168.4.1</strong> to reconfigure."
+                       "</div>"));
+  streamHtmlFooter();
   delay(2000);
   factoryReset();
 }
@@ -655,13 +757,9 @@ void handleStatus() {
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
-  const char* sensorTypeName;
-  switch (cfgSensorType) {
-    case SENSOR_TOF:      sensorTypeName = "tof"; break;
-    case SENSOR_IR_BREAK: sensorTypeName = "ir_break"; break;
-    default:              sensorTypeName = "digital"; break;
-  }
-  json += "\"sensor_type\":\"" + String(sensorTypeName) + "\",";
+  json += "\"sensor_type\":\"";
+  json += sensorTypeJsonName(cfgSensorType);
+  json += "\",";
   json += "\"sensor_valid\":" + String(lastReading.valid ? "true" : "false") + ",";
   json += "\"level\":\"" + String(levelStateName(currentState)) + "\"";
   if (cfgSensorType == SENSOR_TOF) {
@@ -671,6 +769,12 @@ void handleStatus() {
     json += "\"half\":" + String(cfgTofHalf) + ",";
     json += "\"high\":" + String(cfgTofHigh);
     json += "}";
+    const char* tofChipName;
+    switch (activeTofChip) {
+      case TOF_VL53L1X: tofChipName = "vl53l1x"; break;
+      default:          tofChipName = "none"; break;   // TOF_NONE
+    }
+    json += ",\"tof_chip\":\"" + String(tofChipName) + "\"";
   }
   if (cfgSensorType == SENSOR_IR_BREAK) {
     // Fresh pin read — beam_state is an instantaneous snapshot, not the debounced level.
@@ -683,7 +787,9 @@ void handleStatus() {
 
 void handleUpdatePage() {
   if (!requireAuth()) return;
-  server.send(200, "text/html", buildUpdatePage());
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamUpdatePage();
 }
 
 void handleUpdateUpload() {
@@ -711,12 +817,14 @@ void handleUpdateUpload() {
 void handleUpdateResult() {
   if (!requireAuth()) return;
   bool success = !Update.hasError();
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
   if (success) {
-    server.send(200, "text/html", buildUpdateResultPage(true, "Firmware updated successfully."));
+    streamUpdateResultPage(true, "Firmware updated successfully.");
     delay(2000);
     ESP.restart();
   } else {
-    server.send(200, "text/html", buildUpdateResultPage(false, "Update failed. Please try again with a valid .bin file."));
+    streamUpdateResultPage(false, "Update failed. Please try again with a valid .bin file.");
   }
 }
 
@@ -751,6 +859,7 @@ bool connectWiFi() {
   WiFi.begin(cfgSSID.c_str(), cfgPassword.c_str());
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    esp_task_wdt_reset();
     delay(500);
     Serial.print(".");
     attempts++;
@@ -779,6 +888,7 @@ bool sendTelegram(const String& message) {
   String ids[] = {cfgChatID, cfgChatID2, cfgChatID3};
   for (int i = 0; i < 3; i++) {
     if (ids[i].length() > 0) {
+      esp_task_wdt_reset();
       bool sent = bot->sendMessage(ids[i].c_str(), message, "");
       Serial.println(sent ? ("Telegram sent to " + ids[i]) : ("Telegram FAILED for " + ids[i]));
       if (sent) anySent = true;
@@ -791,9 +901,40 @@ bool sendTelegram(const String& message) {
 // Sensor — dispatch on cfgSensorType
 // =====================================================================
 
-Adafruit_VL53L0X tofSensor;     // unused until Task 4 wires the ToF path
+Adafruit_VL53L1X tofL1x;       // Constructed but not initialized until initTof() (Task 3) probes the bus.
+TofChip activeTofChip = TOF_NONE;
 int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
 bool sensorFaultActive = false; // Task 9
+
+// Initialize the VL53L1X ToF sensor. Configures long mode + 50ms timing budget
+// and starts continuous ranging. Sets activeTofChip on success. Returns true on success.
+bool initTof() {
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  // Fast NACK probe before tofL1x.begin(): the Adafruit/ST library's InitSensor()
+  // contains a `while(tmp==0)` poll on CheckForDataReady that never returns when
+  // no sensor is on the bus, freezing the entire Arduino loop. A 0x29 ping fails
+  // in <1 ms when nothing is wired and avoids that trap entirely.
+  Wire.beginTransmission(0x29);
+  if (Wire.endTransmission() != 0) {
+    activeTofChip = TOF_NONE;
+    return false;
+  }
+  if (!tofL1x.begin(0x29, &Wire)) {
+    activeTofChip = TOF_NONE;
+    return false;
+  }
+  tofL1x.VL53L1X_SetDistanceMode(2);   // 2 = Long mode (~4 m range)
+  tofL1x.setTimingBudget(50);          // 50 ms per measurement
+  if (!tofL1x.startRanging()) {
+    Serial.println("VL53L1X detected but startRanging() failed — bailing out of ToF init");
+    activeTofChip = TOF_NONE;
+    return false;
+  }
+  activeTofChip = TOF_VL53L1X;
+  Serial.println("Sensor: TOF (VL53L1X, long mode) on I2C SDA="
+                 + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+  return true;
+}
 
 bool initSensor() {
   if (cfgSensorType == SENSOR_DIGITAL) {
@@ -807,13 +948,11 @@ bool initSensor() {
                    " (HIGH=clear, LOW=broken)");
     return true;
   }
-  // ToF path
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  if (!tofSensor.begin()) {
-    Serial.println("Sensor: TOF init FAILED — check I2C wiring (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+  // ToF path — VL53L1X
+  if (!initTof()) {
+    Serial.println("Sensor: TOF init FAILED — VL53L1X did not respond on I2C (SDA=21, SCL=22, VCC=3V3, GND=GND)");
     return false;
   }
-  Serial.println("Sensor: TOF (VL53L0X) on I2C SDA=" + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
   return true;
 }
 
@@ -824,17 +963,19 @@ SensorReading readSensorRaw() {
     r.valid = true;
     return r;
   }
-  // ToF path
-  VL53L0X_RangingMeasurementData_t data;
-  tofSensor.rangingTest(&data, false);
-  if (data.RangeStatus == 4) {       // out of range / no signal
-    return r;                         // r.valid stays false
-  }
-  uint16_t mm = data.RangeMilliMeter;
-  if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) {
-    return r;                         // out of accepted range
-  }
-  r.distanceMm = mm;
+  // ToF path — VL53L1X only
+  if (activeTofChip != TOF_VL53L1X) return r;     // TOF_NONE — should not occur in normal flow
+  if (!tofL1x.dataReady()) return r;              // measurement not ready; debounce will skip this read
+  // INVARIANT: once dataReady() is true, distance/GetRangeStatus/clearInterrupt MUST run
+  // back-to-back with no early returns between them. Skipping clearInterrupt() leaves the
+  // chip stuck — dataReady() will never re-assert. Validation guards live AFTER clearInterrupt.
+  int16_t mm = tofL1x.distance();                 // signed; -1 on error
+  uint8_t status = 0xFF;
+  tofL1x.VL53L1X_GetRangeStatus(&status);
+  tofL1x.clearInterrupt();                        // arm next measurement (must run before any return below)
+  if (status != 0 || mm < 0) return r;
+  if ((uint16_t)mm < TOF_MIN_MM || (uint16_t)mm > TOF_MAX_MM) return r;
+  r.distanceMm = (uint16_t)mm;
   r.valid = true;
   return r;
 }
@@ -983,6 +1124,24 @@ void setup() {
   delay(1000);
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
+  const esp_reset_reason_t bootReason = esp_reset_reason();
+  const bool recoveredFromWdt = (bootReason == ESP_RST_TASK_WDT);
+  if (recoveredFromWdt) {
+    Serial.println("Boot reason: ESP_RST_TASK_WDT (recovered from a hang)");
+  }
+
+  // Arduino-ESP32 v3 pre-initializes the TWDT with its own (shorter) default timeout.
+  // Reconfigure to our 15 s budget so Telegram POSTs and bus-recovery don't false-trigger.
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 15000,        // 15 s
+    .idle_core_mask = 0,        // don't watch the idle tasks; we only care about the loop task
+    .trigger_panic = true,      // panic → reboot on miss
+  };
+  if (esp_task_wdt_reconfigure(&wdt_config) != ESP_OK) {
+    esp_task_wdt_init(&wdt_config);  // first-time init if no prior watchdog
+  }
+  esp_task_wdt_add(NULL);        // subscribe the current (Arduino loop) task
+
   initSensor();
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
@@ -990,14 +1149,8 @@ void setup() {
   checkResetButton();
 
   loadSettings();
-  const char* bootSensorTypeName;
-  switch (cfgSensorType) {
-    case SENSOR_TOF:      bootSensorTypeName = "TOF"; break;
-    case SENSOR_IR_BREAK: bootSensorTypeName = "IR_BREAK"; break;
-    default:              bootSensorTypeName = "DIGITAL"; break;
-  }
   Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
-                bootSensorTypeName,
+                sensorTypeBootName(cfgSensorType),
                 cfgTofLow, cfgTofHalf, cfgTofHigh);
 
   if (!configured) {
@@ -1011,8 +1164,8 @@ void setup() {
       apMode = false;
       initBot();
       // If ToF init silently failed earlier, alert now that we have Telegram
-      if (cfgSensorType == SENSOR_TOF && !tofSensor.begin()) {
-        sendTelegram("⚠️ ToF init failed — check I2C wiring or switch sensor type via web UI.");
+      if (cfgSensorType == SENSOR_TOF && activeTofChip == TOF_NONE) {
+        sendTelegram("⚠️ ToF init failed — VL53L1X did not respond on I2C. Check wiring or switch sensor type via web UI.");
       }
       // Take an initial sensor reading to establish currentState before announcing online.
       delay(200);  // let sensor stabilize
@@ -1021,17 +1174,16 @@ void setup() {
       Serial.printf("Boot: initial state=%s (after WiFi connect)\n", levelStateName(currentState));
 
       String msg = "🛢️ Oil tank monitor is ONLINE.\nSensor: ";
-      switch (cfgSensorType) {
-        case SENSOR_TOF:      msg += "ToF"; break;
-        case SENSOR_IR_BREAK: msg += "IR break-beam (sight gauge)"; break;
-        default:              msg += "Digital"; break;
-      }
+      msg += sensorTypeDisplayName(cfgSensorType);
       msg += "\nLevel: " + String(levelStateName(currentState));
       if (cfgSensorType == SENSOR_TOF && r.valid) {
         msg += " (" + String(r.distanceMm) + "mm)";
       }
       msg += "\nSettings: http://" + WiFi.localIP().toString();
       sendTelegram(msg);
+      if (recoveredFromWdt) {
+        sendTelegram("⚠️ Recovered from a hang (watchdog reset). The device auto-rebooted to restore service.");
+      }
     }
   }
 
@@ -1051,6 +1203,7 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
   server.handleClient();
   checkResetButton();
 
@@ -1063,6 +1216,7 @@ void loop() {
         server.begin();
       }
     }
+    esp_task_wdt_reset();
     delay(100);
     return;
   }
@@ -1082,8 +1236,7 @@ void loop() {
         if (tofInvalidCount == TOF_RECOVERY_CYCLES) {
           Serial.println("ToF: attempting I2C bus recovery");
           Wire.end();
-          Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-          tofSensor.begin();
+          initTof();   // re-runs probe + long-mode + startRanging on the VL53L1X
         }
         if (tofInvalidCount == TOF_FAULT_CYCLES && !sensorFaultActive) {
           sensorFaultActive = true;
