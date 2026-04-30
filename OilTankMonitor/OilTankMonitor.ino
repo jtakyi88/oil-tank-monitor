@@ -1025,6 +1025,12 @@ void setup() {
   delay(1000);
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
+  const esp_reset_reason_t bootReason = esp_reset_reason();
+  const bool recoveredFromWdt = (bootReason == ESP_RST_TASK_WDT);
+  if (recoveredFromWdt) {
+    Serial.println("Boot reason: ESP_RST_TASK_WDT (recovered from a hang)");
+  }
+
   // Arduino-ESP32 v3 pre-initializes the TWDT with its own (shorter) default timeout.
   // Reconfigure to our 15 s budget so Telegram POSTs and bus-recovery don't false-trigger.
   esp_task_wdt_config_t wdt_config = {
@@ -1086,6 +1092,9 @@ void setup() {
       }
       msg += "\nSettings: http://" + WiFi.localIP().toString();
       sendTelegram(msg);
+      if (recoveredFromWdt) {
+        sendTelegram("⚠️ Recovered from a hang (watchdog reset). The device auto-rebooted to restore service.");
+      }
     }
   }
 
