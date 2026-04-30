@@ -24,12 +24,11 @@
 #include <UniversalTelegramBot.h>
 #include <Update.h>
 #include <Wire.h>
-#include <Adafruit_VL53L0X.h>
 #include <Adafruit_VL53L1X.h>
 
 // ===== SENSOR ABSTRACTION =====
 enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
-enum TofChip { TOF_NONE, TOF_VL53L0X, TOF_VL53L1X };
+enum TofChip { TOF_NONE, TOF_VL53L1X };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
@@ -63,8 +62,8 @@ const char* levelStateName(LevelState s) {
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
-const int TOF_MIN_MM = 30;             // VL53L0X spec lower bound
-const int TOF_MAX_MM = 4000;           // VL53L1X long-mode upper bound (VL53L0X readings cap naturally at ~2000)
+const int TOF_MIN_MM = 30;             // VL53L1X spec lower bound
+const int TOF_MAX_MM = 4000;           // VL53L1X long-mode upper bound
 const int TOF_FAULT_CYCLES = 5;        // consecutive invalid reads → fault alert
 const int TOF_RECOVERY_CYCLES = 3;     // consecutive invalid reads → I2C reinit attempt
 
@@ -114,7 +113,7 @@ SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgrad
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
-extern TofChip activeTofChip;   // defined with tofL0x/tofL1x near initTof()
+extern TofChip activeTofChip;   // defined with tofL1x near initTof()
 
 LevelState currentState = LEVEL_UNKNOWN;
 SensorReading lastReading = { false, false, 0 };
@@ -303,7 +302,7 @@ String buildConfigPage() {
   page += "<label for='sensor_type'>Sensor Type</label>";
   page += "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>";
   page += "<option value='0'" + String(cfgSensorType == SENSOR_DIGITAL ? " selected" : "") + ">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>";
-  page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L0X / VL53L1X auto-detect)</option>";
+  page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L1X)</option>";
   page += "<option value='2'" + String(cfgSensorType == SENSOR_IR_BREAK ? " selected" : "") + ">IR break-beam (sight gauge puck)</option>";
   page += "</select>";
 
@@ -676,9 +675,8 @@ void handleStatus() {
     json += "}";
     const char* tofChipName;
     switch (activeTofChip) {
-      case TOF_VL53L0X: tofChipName = "vl53l0x"; break;
       case TOF_VL53L1X: tofChipName = "vl53l1x"; break;
-      default:          tofChipName = "none"; break;
+      default:          tofChipName = "none"; break;   // TOF_NONE
     }
     json += ",\"tof_chip\":\"" + String(tofChipName) + "\"";
   }
@@ -801,40 +799,30 @@ bool sendTelegram(const String& message) {
 // Sensor — dispatch on cfgSensorType
 // =====================================================================
 
-Adafruit_VL53L0X tofL0x;
 Adafruit_VL53L1X tofL1x;       // Constructed but not initialized until initTof() (Task 3) probes the bus.
 TofChip activeTofChip = TOF_NONE;
 int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
 bool sensorFaultActive = false; // Task 9
 
-// Detect which ToF chip is on the I2C bus. Tries VL53L1X first (more capable,
-// matches the user's TOF400C breakout), then falls back to VL53L0X.
-// On success, configures the chip and sets activeTofChip. Returns true on success.
+// Initialize the VL53L1X ToF sensor. Configures long mode + 50ms timing budget
+// and starts continuous ranging. Sets activeTofChip on success. Returns true on success.
 bool initTof() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  // VL53L1X first
-  if (tofL1x.begin(0x29, &Wire)) {
-    tofL1x.VL53L1X_SetDistanceMode(2);   // 2 = Long mode (~4 m range)
-    tofL1x.setTimingBudget(50);          // 50 ms per measurement
-    if (!tofL1x.startRanging()) {
-      Serial.println("VL53L1X detected but startRanging() failed — bailing out of ToF init");
-      activeTofChip = TOF_NONE;
-      return false;
-    }
-    activeTofChip = TOF_VL53L1X;
-    Serial.println("Sensor: TOF (VL53L1X, long mode) on I2C SDA="
-                   + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
-    return true;
+  if (!tofL1x.begin(0x29, &Wire)) {
+    activeTofChip = TOF_NONE;
+    return false;
   }
-  // Fallback to VL53L0X
-  if (tofL0x.begin()) {
-    activeTofChip = TOF_VL53L0X;
-    Serial.println("Sensor: TOF (VL53L0X) on I2C SDA="
-                   + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
-    return true;
+  tofL1x.VL53L1X_SetDistanceMode(2);   // 2 = Long mode (~4 m range)
+  tofL1x.setTimingBudget(50);          // 50 ms per measurement
+  if (!tofL1x.startRanging()) {
+    Serial.println("VL53L1X detected but startRanging() failed — bailing out of ToF init");
+    activeTofChip = TOF_NONE;
+    return false;
   }
-  activeTofChip = TOF_NONE;
-  return false;
+  activeTofChip = TOF_VL53L1X;
+  Serial.println("Sensor: TOF (VL53L1X, long mode) on I2C SDA="
+                 + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+  return true;
 }
 
 bool initSensor() {
@@ -849,9 +837,9 @@ bool initSensor() {
                    " (HIGH=clear, LOW=broken)");
     return true;
   }
-  // ToF path — auto-detect VL53L1X or VL53L0X
+  // ToF path — VL53L1X
   if (!initTof()) {
-    Serial.println("Sensor: TOF init FAILED — neither VL53L1X nor VL53L0X responded on I2C (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+    Serial.println("Sensor: TOF init FAILED — VL53L1X did not respond on I2C (SDA=21, SCL=22, VCC=3V3, GND=GND)");
     return false;
   }
   return true;
@@ -864,36 +852,21 @@ SensorReading readSensorRaw() {
     r.valid = true;
     return r;
   }
-  // ToF path — dispatch on detected chip
-  if (activeTofChip == TOF_VL53L0X) {
-    VL53L0X_RangingMeasurementData_t data;
-    tofL0x.rangingTest(&data, false);
-    if (data.RangeStatus == 4) return r;          // out of range / no signal
-    uint16_t mm = data.RangeMilliMeter;
-    // TOF_MAX_MM is 4000 to accommodate VL53L1X long mode. VL53L0X readings
-    // cap naturally at ~2000 mm and use RangeStatus 4 for out-of-signal, so
-    // the widened acceptance window is safe for both chips.
-    if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) return r;
-    r.distanceMm = mm;
-    r.valid = true;
-    return r;
-  }
-  if (activeTofChip == TOF_VL53L1X) {
-    if (!tofL1x.dataReady()) return r;            // measurement not ready; debounce will skip this read
-    // INVARIANT: once dataReady() is true, distance/GetRangeStatus/clearInterrupt MUST run
-    // back-to-back with no early returns between them. Skipping clearInterrupt() leaves the
-    // chip stuck — dataReady() will never re-assert. Validation guards live AFTER clearInterrupt.
-    int16_t mm = tofL1x.distance();               // signed; -1 on error
-    uint8_t status = 0xFF;
-    tofL1x.VL53L1X_GetRangeStatus(&status);
-    tofL1x.clearInterrupt();                      // arm next measurement (must run before any return below)
-    if (status != 0 || mm < 0) return r;
-    if ((uint16_t)mm < TOF_MIN_MM || (uint16_t)mm > TOF_MAX_MM) return r;
-    r.distanceMm = (uint16_t)mm;
-    r.valid = true;
-    return r;
-  }
-  return r;  // TOF_NONE — should not occur in normal flow
+  // ToF path — VL53L1X only
+  if (activeTofChip != TOF_VL53L1X) return r;     // TOF_NONE — should not occur in normal flow
+  if (!tofL1x.dataReady()) return r;              // measurement not ready; debounce will skip this read
+  // INVARIANT: once dataReady() is true, distance/GetRangeStatus/clearInterrupt MUST run
+  // back-to-back with no early returns between them. Skipping clearInterrupt() leaves the
+  // chip stuck — dataReady() will never re-assert. Validation guards live AFTER clearInterrupt.
+  int16_t mm = tofL1x.distance();                 // signed; -1 on error
+  uint8_t status = 0xFF;
+  tofL1x.VL53L1X_GetRangeStatus(&status);
+  tofL1x.clearInterrupt();                        // arm next measurement (must run before any return below)
+  if (status != 0 || mm < 0) return r;
+  if ((uint16_t)mm < TOF_MIN_MM || (uint16_t)mm > TOF_MAX_MM) return r;
+  r.distanceMm = (uint16_t)mm;
+  r.valid = true;
+  return r;
 }
 
 uint16_t medianOf3(uint16_t a, uint16_t b, uint16_t c) {
@@ -1069,7 +1042,7 @@ void setup() {
       initBot();
       // If ToF init silently failed earlier, alert now that we have Telegram
       if (cfgSensorType == SENSOR_TOF && activeTofChip == TOF_NONE) {
-        sendTelegram("⚠️ ToF init failed — neither VL53L0X nor VL53L1X responded on I2C. Check wiring or switch sensor type via web UI.");
+        sendTelegram("⚠️ ToF init failed — VL53L1X did not respond on I2C. Check wiring or switch sensor type via web UI.");
       }
       // Take an initial sensor reading to establish currentState before announcing online.
       delay(200);  // let sensor stabilize
@@ -1139,7 +1112,7 @@ void loop() {
         if (tofInvalidCount == TOF_RECOVERY_CYCLES) {
           Serial.println("ToF: attempting I2C bus recovery");
           Wire.end();
-          initTof();   // re-runs detection and reconfigures whichever chip responds
+          initTof();   // re-runs probe + long-mode + startRanging on the VL53L1X
         }
         if (tofInvalidCount == TOF_FAULT_CYCLES && !sensorFaultActive) {
           sensorFaultActive = true;
