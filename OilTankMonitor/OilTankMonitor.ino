@@ -23,9 +23,51 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <Update.h>
+#include <Wire.h>
+#include <Adafruit_VL53L0X.h>
+
+// ===== SENSOR ABSTRACTION =====
+enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
+
+struct SensorReading {
+  bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
+  bool digitalState;     // HIGH = object/liquid present (DIGITAL) or beam clear (IR_BREAK); meaningful when SENSOR_DIGITAL or SENSOR_IR_BREAK
+  uint16_t distanceMm;   // mm to puck; meaningful when SENSOR_TOF
+};
+
+enum LevelState {
+  LEVEL_LOW,           // distance > cfgTofLow  (or digital: no liquid)
+  LEVEL_BELOW_HALF,    // cfgTofHalf < distance <= cfgTofLow
+  LEVEL_ABOVE_HALF,    // cfgTofHigh < distance <= cfgTofHalf
+  LEVEL_HIGH,          // distance <= cfgTofHigh (digital: liquid present)
+  LEVEL_OIL_OK,        // IR break-beam: beam clear (puck above low-oil mark)
+  LEVEL_OIL_LOW,       // IR break-beam: beam broken (puck has reached the mark)
+  LEVEL_UNKNOWN        // no valid reading yet (boot)
+};
+
+const char* levelStateName(LevelState s) {
+  switch (s) {
+    case LEVEL_LOW:        return "LOW";
+    case LEVEL_BELOW_HALF: return "BELOW_HALF";
+    case LEVEL_ABOVE_HALF: return "ABOVE_HALF";
+    case LEVEL_HIGH:       return "HIGH";
+    case LEVEL_OIL_OK:     return "OIL_OK";
+    case LEVEL_OIL_LOW:    return "OIL_LOW";
+    case LEVEL_UNKNOWN:    return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+
+const int I2C_SDA_PIN = 21;            // ESP32 default
+const int I2C_SCL_PIN = 22;            // ESP32 default
+const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
+const int TOF_MIN_MM = 30;             // VL53L0X spec lower bound
+const int TOF_MAX_MM = 2000;           // VL53L0X spec upper bound (mm we accept)
+const int TOF_FAULT_CYCLES = 5;        // consecutive invalid reads → fault alert
+const int TOF_RECOVERY_CYCLES = 3;     // consecutive invalid reads → I2C reinit attempt
 
 // ===== FIRMWARE VERSION =====
-const char* FW_VERSION = "1.1.0";
+const char* FW_VERSION = "2.0.0";
 
 // ===== AP MODE SETTINGS =====
 const char* AP_SSID     = "OilMonitor-Setup";
@@ -65,12 +107,19 @@ String cfgDNS;
 const char* WEB_USER  = "admin";
 String cfgWebPassword = "admin";
 
+// Sensor configuration
+SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgraders
+uint16_t cfgTofLow  = 200;                   // mm — alert threshold
+uint16_t cfgTofHalf = 130;                   // mm — half mark
+uint16_t cfgTofHigh = 60;                    // mm — refill complete
+
+LevelState currentState = LEVEL_UNKNOWN;
+SensorReading lastReading = { false, false, 0 };
+
 // Sensor state
 unsigned long lastAlertTime   = 0;
 unsigned long lastSensorCheck = 0;
 bool oilIsLow                = false;
-int debounceCounter          = 0;
-bool lastRawReading          = false;
 
 // Session management
 const unsigned long SESSION_TIMEOUT_MS = 900000UL;  // 15 minutes
@@ -125,6 +174,10 @@ void loadSettings() {
   cfgSubnet    = prefs.getString("subnet", "255.255.255.0");
   cfgDNS         = prefs.getString("dns", "8.8.8.8");
   cfgWebPassword = prefs.getString("web_pass", "admin");
+  cfgSensorType = (SensorType)prefs.getUChar("sensor_type", 0);
+  cfgTofLow     = prefs.getUShort("tof_low", 200);
+  cfgTofHalf    = prefs.getUShort("tof_half", 130);
+  cfgTofHigh    = prefs.getUShort("tof_high", 60);
   prefs.end();
   configured = (cfgSSID.length() > 0 && cfgBotToken.length() > 0 && cfgChatID.length() > 0);
 }
@@ -143,6 +196,10 @@ void saveSettings() {
   prefs.putString("subnet", cfgSubnet);
   prefs.putString("dns", cfgDNS);
   prefs.putString("web_pass", cfgWebPassword);
+  prefs.putUChar("sensor_type", (uint8_t)cfgSensorType);
+  prefs.putUShort("tof_low", cfgTofLow);
+  prefs.putUShort("tof_half", cfgTofHalf);
+  prefs.putUShort("tof_high", cfgTofHigh);
   prefs.end();
 }
 
@@ -170,7 +227,7 @@ String htmlHeader(const String& title) {
   h += ".toggle input{width:auto;}";
   h += ".status{background:#16213e;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #16c79a;}";
   h += ".status.warn{border-left-color:#e94560;}";
-  h += ".ip-fields{display:none;}.ip-fields.show{display:block;}";
+  h += ".ip-fields,.tof-fields{display:none;}.ip-fields.show,.tof-fields.show{display:block;}";
   h += "a{color:#16c79a;}";
   h += ".nav{margin:16px 0;font-size:0.9em;}";
   h += ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}";
@@ -238,6 +295,26 @@ String buildConfigPage() {
   page += "<button type='button' onclick=\"removeChatID(3)\" style='width:40px;padding:10px;margin-top:0;background:#e94560;font-size:1.2em;'>-</button>";
   page += "</div>";
 
+  // Sensor Configuration section
+  page += "<h2>Sensor Configuration</h2>";
+  page += "<label for='sensor_type'>Sensor Type</label>";
+  page += "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>";
+  page += "<option value='0'" + String(cfgSensorType == SENSOR_DIGITAL ? " selected" : "") + ">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>";
+  page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L0X)</option>";
+  page += "<option value='2'" + String(cfgSensorType == SENSOR_IR_BREAK ? " selected" : "") + ">IR break-beam (sight gauge puck)</option>";
+  page += "</select>";
+
+  page += "<div class='tof-fields" + String(cfgSensorType == SENSOR_TOF ? " show" : "") + "' id='tof-fields'>";
+  page += "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> mm</div>";
+  page += "<label for='tof_low'>LOW threshold (mm) — alert below this</label>";
+  page += "<input type='text' id='tof_low' name='tof_low' value='" + String(cfgTofLow) + "'>";
+  page += "<label for='tof_half'>HALF threshold (mm)</label>";
+  page += "<input type='text' id='tof_half' name='tof_half' value='" + String(cfgTofHalf) + "'>";
+  page += "<label for='tof_high'>HIGH threshold (mm) — refill complete above this</label>";
+  page += "<input type='text' id='tof_high' name='tof_high' value='" + String(cfgTofHigh) + "'>";
+  page += "<p style='font-size:0.85em;color:#999;'>Smaller mm = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm.</p>";
+  page += "</div>";
+
   // Network section
   page += "<h2>Network Settings</h2>";
   page += "<div class='toggle'>";
@@ -288,6 +365,26 @@ String buildConfigPage() {
   page += "function toggleStatic(){";
   page += "  document.getElementById('ip-fields').classList.toggle('show',";
   page += "    document.getElementById('static_ip').checked);}";
+  page += "function toggleTof(){";
+  page += "  var v=document.getElementById('sensor_type').value;";
+  page += "  document.getElementById('tof-fields').classList.toggle('show', v==='1');";
+  page += "}";
+  page += "var tofPoll=null;";
+  page += "function startTofPoll(){";
+  page += "  if(tofPoll) clearInterval(tofPoll);";
+  page += "  tofPoll=setInterval(function(){";
+  page += "    if(document.getElementById('sensor_type').value!=='1'){clearInterval(tofPoll);tofPoll=null;return;}";
+  page += "    fetch('/status').then(r=>r.json()).then(j=>{";
+  page += "      var el=document.getElementById('tof-distance');";
+  page += "      if(el && j.distance_mm!==undefined){el.textContent=j.distance_mm;}";
+  page += "      else if(el){el.textContent='—';}";
+  page += "    }).catch(()=>{});";
+  page += "  },2000);";
+  page += "}";
+  page += "if(document.getElementById('sensor_type').value==='1'){startTofPoll();}";
+  page += "document.getElementById('sensor_type').addEventListener('change',function(){";
+  page += "  if(this.value==='1') startTofPoll();";
+  page += "});";
   page += "function toggleVis(id,btn){";
   page += "  var f=document.getElementById(id);";
   page += "  if(f.type==='password'){f.type='text';btn.style.opacity='0.5';}";
@@ -463,6 +560,15 @@ void handleRoot() {
   server.send(200, "text/html", buildConfigPage());
 }
 
+void sendValidationError(const String& message) {
+  String page = htmlHeader("Configuration Error");
+  page += "<h1>Configuration Error</h1>";
+  page += "<div class='status warn'>" + message + "</div>";
+  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
+  page += htmlFooter();
+  server.send(400, "text/html", page);
+}
+
 void handleSave() {
   if (!requireAuth()) return;
   cfgSSID     = server.arg("ssid");
@@ -476,6 +582,42 @@ void handleSave() {
   cfgGateway  = server.arg("gateway");
   cfgSubnet   = server.arg("subnet");
   cfgDNS      = server.arg("dns");
+
+  // Sensor configuration — stage into locals first, validate, then commit to globals.
+  // This prevents in-memory corruption if validation fails (NVS is also untouched on failure).
+  SensorType newSensorType = cfgSensorType;
+  uint16_t newTofLow  = cfgTofLow;
+  uint16_t newTofHalf = cfgTofHalf;
+  uint16_t newTofHigh = cfgTofHigh;
+
+  if (server.hasArg("sensor_type")) {
+    int t = server.arg("sensor_type").toInt();
+    if (t == 1) newSensorType = SENSOR_TOF;
+    else if (t == 2) newSensorType = SENSOR_IR_BREAK;
+    else newSensorType = SENSOR_DIGITAL;
+  }
+  if (server.hasArg("tof_low"))  newTofLow  = server.arg("tof_low").toInt();
+  if (server.hasArg("tof_half")) newTofHalf = server.arg("tof_half").toInt();
+  if (server.hasArg("tof_high")) newTofHigh = server.arg("tof_high").toInt();
+
+  if (newSensorType == SENSOR_TOF) {
+    if (newTofHigh < TOF_MIN_MM || newTofHigh > TOF_MAX_MM ||
+        newTofHalf < TOF_MIN_MM || newTofHalf > TOF_MAX_MM ||
+        newTofLow  < TOF_MIN_MM || newTofLow  > TOF_MAX_MM) {
+      sendValidationError("Each ToF threshold must be between " + String(TOF_MIN_MM) + " and " + String(TOF_MAX_MM) + " mm.");
+      return;
+    }
+    if (!(newTofHigh < newTofHalf && newTofHalf < newTofLow)) {
+      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller mm = fuller tank). Got HIGH=" + String(newTofHigh) + " HALF=" + String(newTofHalf) + " LOW=" + String(newTofLow) + ".");
+      return;
+    }
+  }
+
+  // Validation passed — commit to globals
+  cfgSensorType = newSensorType;
+  cfgTofLow  = newTofLow;
+  cfgTofHalf = newTofHalf;
+  cfgTofHigh = newTofHigh;
 
   if (cfgSubnet.length() == 0) cfgSubnet = "255.255.255.0";
   if (cfgDNS.length() == 0)    cfgDNS = "8.8.8.8";
@@ -512,7 +654,29 @@ void handleStatus() {
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
-  json += "\"firmware\":\"" + String(FW_VERSION) + "\"";
+  json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
+  const char* sensorTypeName;
+  switch (cfgSensorType) {
+    case SENSOR_TOF:      sensorTypeName = "tof"; break;
+    case SENSOR_IR_BREAK: sensorTypeName = "ir_break"; break;
+    default:              sensorTypeName = "digital"; break;
+  }
+  json += "\"sensor_type\":\"" + String(sensorTypeName) + "\",";
+  json += "\"sensor_valid\":" + String(lastReading.valid ? "true" : "false") + ",";
+  json += "\"level\":\"" + String(levelStateName(currentState)) + "\"";
+  if (cfgSensorType == SENSOR_TOF) {
+    json += ",\"distance_mm\":" + String(lastReading.distanceMm);
+    json += ",\"thresholds\":{";
+    json += "\"low\":" + String(cfgTofLow) + ",";
+    json += "\"half\":" + String(cfgTofHalf) + ",";
+    json += "\"high\":" + String(cfgTofHigh);
+    json += "}";
+  }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    // Fresh pin read — beam_state is an instantaneous snapshot, not the debounced level.
+    bool clear = (digitalRead(SENSOR_PIN) == HIGH);
+    json += ",\"beam_state\":\"" + String(clear ? "clear" : "broken") + "\"";
+  }
   json += "}";
   server.send(200, "application/json", json);
 }
@@ -624,42 +788,217 @@ bool sendTelegram(const String& message) {
 }
 
 // =====================================================================
-// Sensor
+// Sensor — dispatch on cfgSensorType
 // =====================================================================
 
-bool readSensorDebounced() {
-  // XKC-Y25-V: HIGH = liquid present, LOW = no liquid
-  bool noLiquid = digitalRead(SENSOR_PIN) == LOW;
+Adafruit_VL53L0X tofSensor;     // unused until Task 4 wires the ToF path
+int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
+bool sensorFaultActive = false; // Task 9
 
-  if (noLiquid == lastRawReading) {
-    if (debounceCounter < DEBOUNCE_COUNT) debounceCounter++;
-  } else {
-    debounceCounter = 1;
-    lastRawReading = noLiquid;
+bool initSensor() {
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    pinMode(SENSOR_PIN, INPUT);
+    Serial.println("Sensor: DIGITAL on GPIO" + String(SENSOR_PIN));
+    return true;
   }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    pinMode(SENSOR_PIN, INPUT_PULLUP);
+    Serial.println("Sensor: IR break-beam on GPIO" + String(SENSOR_PIN) +
+                   " (HIGH=clear, LOW=broken)");
+    return true;
+  }
+  // ToF path
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  if (!tofSensor.begin()) {
+    Serial.println("Sensor: TOF init FAILED — check I2C wiring (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+    return false;
+  }
+  Serial.println("Sensor: TOF (VL53L0X) on I2C SDA=" + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+  return true;
+}
 
-  if (debounceCounter >= DEBOUNCE_COUNT) {
-    return noLiquid;
+SensorReading readSensorRaw() {
+  SensorReading r = { false, false, 0 };
+  if (cfgSensorType == SENSOR_DIGITAL || cfgSensorType == SENSOR_IR_BREAK) {
+    r.digitalState = (digitalRead(SENSOR_PIN) == HIGH);
+    r.valid = true;
+    return r;
   }
-  return oilIsLow;
+  // ToF path
+  VL53L0X_RangingMeasurementData_t data;
+  tofSensor.rangingTest(&data, false);
+  if (data.RangeStatus == 4) {       // out of range / no signal
+    return r;                         // r.valid stays false
+  }
+  uint16_t mm = data.RangeMilliMeter;
+  if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) {
+    return r;                         // out of accepted range
+  }
+  r.distanceMm = mm;
+  r.valid = true;
+  return r;
+}
+
+uint16_t medianOf3(uint16_t a, uint16_t b, uint16_t c) {
+  if ((a >= b && a <= c) || (a <= b && a >= c)) return a;
+  if ((b >= a && b <= c) || (b <= a && b >= c)) return b;
+  return c;
+}
+
+// Existing 3-read debounce, now operating on SensorReading
+SensorReading readSensor() {
+  static int debounce = 0;
+  static SensorReading lastRaw = { false, false, 0 };
+  SensorReading raw = readSensorRaw();
+
+  if (cfgSensorType == SENSOR_DIGITAL || cfgSensorType == SENSOR_IR_BREAK) {
+    if (raw.digitalState == lastRaw.digitalState && raw.valid) {
+      if (debounce < DEBOUNCE_COUNT) debounce++;
+    } else {
+      debounce = 1;
+      lastRaw = raw;
+    }
+    if (debounce >= DEBOUNCE_COUNT) return raw;
+    // Not yet stable — return last accepted reading
+    // oilIsLow is true when the last accepted state was LOW (digital) or OIL_LOW (IR_BREAK);
+    // !oilIsLow reconstructs the corresponding digitalState for the unstable-debounce fallback.
+    SensorReading last = { true, !oilIsLow, 0 };
+    return last;
+  }
+  // ToF: take 3 readings ~50 ms apart, return the median (rejects single-shot spikes)
+  SensorReading r1 = raw;
+  delay(50);
+  SensorReading r2 = readSensorRaw();
+  delay(50);
+  SensorReading r3 = readSensorRaw();
+  int validCount = (int)r1.valid + (int)r2.valid + (int)r3.valid;
+  SensorReading out = { false, false, 0 };
+  if (validCount >= 2) {
+    // Use only valid readings — substitute equal values for invalids so median works
+    uint16_t a = r1.valid ? r1.distanceMm : (r2.valid ? r2.distanceMm : r3.distanceMm);
+    uint16_t b = r2.valid ? r2.distanceMm : (r1.valid ? r1.distanceMm : r3.distanceMm);
+    uint16_t c = r3.valid ? r3.distanceMm : (r1.valid ? r1.distanceMm : r2.distanceMm);
+    out.distanceMm = medianOf3(a, b, c);
+    out.valid = true;
+  }
+  return out;
+}
+
+// Map a SensorReading to a LevelState, applying hysteresis around ToF thresholds.
+// `prev` is the current state — used to bias the bucketing toward stability when the
+// reading sits near a threshold.
+LevelState bucketReading(const SensorReading& r, LevelState prev) {
+  if (!r.valid) return prev;   // hold last state on a single bad reading
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    // Digital model: only LOW or HIGH (HIGH = liquid present)
+    return r.digitalState ? LEVEL_HIGH : LEVEL_LOW;
+  }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    // Pin HIGH (with pullup) = beam detected = clear path = oil above low-oil mark.
+    // Pin LOW = beam broken (puck has reached the mark) = oil low.
+    return r.digitalState ? LEVEL_OIL_OK : LEVEL_OIL_LOW;
+  }
+  // ToF: distance in mm; smaller = fuller. Hysteresis: require crossing by ±H.
+  uint16_t d = r.distanceMm;
+  uint16_t hyst = TOF_HYSTERESIS_MM;
+  // Adjust thresholds based on direction of approach.
+  // Going UP into a fuller state (smaller d): use lowerBound = threshold - hyst.
+  // Going DOWN into an emptier state (larger d): use upperBound = threshold + hyst.
+  // We pick effective thresholds that resist re-crossing in the opposite direction.
+  uint16_t lowT  = cfgTofLow;
+  uint16_t halfT = cfgTofHalf;
+  uint16_t highT = cfgTofHigh;
+  switch (prev) {
+    case LEVEL_LOW:        if (d >  lowT  - hyst) return LEVEL_LOW;
+                            if (d >  halfT - hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_BELOW_HALF: if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT - hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_ABOVE_HALF: if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT + hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT - hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    case LEVEL_HIGH:       if (d >  lowT  + hyst) return LEVEL_LOW;
+                            if (d >  halfT + hyst) return LEVEL_BELOW_HALF;
+                            if (d >  highT + hyst) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+    default:               // LEVEL_UNKNOWN — initial bucketing without hysteresis bias
+                            if (d >  lowT)  return LEVEL_LOW;
+                            if (d >  halfT) return LEVEL_BELOW_HALF;
+                            if (d >  highT) return LEVEL_ABOVE_HALF;
+                            return LEVEL_HIGH;
+  }
 }
 
 // =====================================================================
 // Setup & Loop
 // =====================================================================
 
+void fireTransitionMessage(LevelState from, LevelState to) {
+  if (cfgSensorType == SENSOR_DIGITAL) {
+    // Digital: only LOW <-> HIGH transitions are meaningful
+    if (from == LEVEL_LOW && to == LEVEL_HIGH) {
+      sendTelegram("✅ Oil tank level restored — sensor detects oil above the line.");
+    } else if (from == LEVEL_HIGH && to == LEVEL_LOW) {
+      sendTelegram("⚠️ OIL TANK LOW — the level has dropped below the sensor. Please refill.");
+    }
+    return;
+  }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    if (from == LEVEL_OIL_OK && to == LEVEL_OIL_LOW) {
+      String msg = "⚠️ Low oil — sight-gauge puck has reached the low-oil mark. Please refill.";
+      msg += "\nSettings: http://" + WiFi.localIP().toString();
+      sendTelegram(msg);
+    } else if (from == LEVEL_OIL_LOW && to == LEVEL_OIL_OK) {
+      sendTelegram("✅ Oil level restored — puck is above the low-oil mark.");
+    }
+    return;
+  }
+  // Defensive: ToF matrix below uses ordinal (<=, >=) comparisons on LevelState.
+  // If the sensor type isn't ToF, exit before those run on out-of-mode states.
+  if (cfgSensorType != SENSOR_TOF) return;
+  // ToF: full multi-state transition matrix
+  if (from == LEVEL_LOW && to >= LEVEL_BELOW_HALF) {
+    sendTelegram("✅ Oil tank above low mark — refill detected.");
+  }
+  if (from <= LEVEL_BELOW_HALF && to >= LEVEL_ABOVE_HALF) {
+    sendTelegram("🔼 Tank is half refilled.");
+  }
+  if (from <= LEVEL_ABOVE_HALF && to == LEVEL_HIGH) {
+    sendTelegram("🔝 Tank at HIGH — refill complete.");
+  }
+  if (from >= LEVEL_ABOVE_HALF && to <= LEVEL_BELOW_HALF && to != LEVEL_LOW) {
+    sendTelegram("📉 Tank is half empty — plan a refill.");
+  }
+  if (from >= LEVEL_BELOW_HALF && to == LEVEL_LOW) {
+    sendTelegram("⚠️ OIL TANK LOW — please refill.");
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
-  pinMode(SENSOR_PIN, INPUT);
+  initSensor();
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
   // Check if BOOT button is held at startup for factory reset
   checkResetButton();
 
   loadSettings();
+  const char* bootSensorTypeName;
+  switch (cfgSensorType) {
+    case SENSOR_TOF:      bootSensorTypeName = "TOF"; break;
+    case SENSOR_IR_BREAK: bootSensorTypeName = "IR_BREAK"; break;
+    default:              bootSensorTypeName = "DIGITAL"; break;
+  }
+  Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
+                bootSensorTypeName,
+                cfgTofLow, cfgTofHalf, cfgTofHigh);
 
   if (!configured) {
     Serial.println("No configuration found — starting AP mode.");
@@ -671,7 +1010,28 @@ void setup() {
     } else {
       apMode = false;
       initBot();
-      sendTelegram("🛢️ Oil tank monitor is ONLINE and watching the level.\nSettings: http://" + WiFi.localIP().toString());
+      // If ToF init silently failed earlier, alert now that we have Telegram
+      if (cfgSensorType == SENSOR_TOF && !tofSensor.begin()) {
+        sendTelegram("⚠️ ToF init failed — check I2C wiring or switch sensor type via web UI.");
+      }
+      // Take an initial sensor reading to establish currentState before announcing online.
+      delay(200);  // let sensor stabilize
+      SensorReading r = readSensor();
+      currentState = bucketReading(r, LEVEL_UNKNOWN);
+      Serial.printf("Boot: initial state=%s (after WiFi connect)\n", levelStateName(currentState));
+
+      String msg = "🛢️ Oil tank monitor is ONLINE.\nSensor: ";
+      switch (cfgSensorType) {
+        case SENSOR_TOF:      msg += "ToF"; break;
+        case SENSOR_IR_BREAK: msg += "IR break-beam (sight gauge)"; break;
+        default:              msg += "Digital"; break;
+      }
+      msg += "\nLevel: " + String(levelStateName(currentState));
+      if (cfgSensorType == SENSOR_TOF && r.valid) {
+        msg += " (" + String(r.distanceMm) + "mm)";
+      }
+      msg += "\nSettings: http://" + WiFi.localIP().toString();
+      sendTelegram(msg);
     }
   }
 
@@ -712,23 +1072,57 @@ void loop() {
   if (now - lastSensorCheck >= SENSOR_CHECK_MS) {
     lastSensorCheck = now;
 
-    bool currentlyLow = readSensorDebounced();
+    SensorReading reading = readSensor();
+    lastReading = reading;
 
-    if (currentlyLow && !oilIsLow) {
-      oilIsLow = true;
-      Serial.println("OIL LOW detected!");
-      sendTelegram("⚠️ OIL TANK LOW — the level has dropped below the sensor. Please refill.");
-      lastAlertTime = now;
-    } else if (!currentlyLow && oilIsLow) {
-      oilIsLow = false;
-      Serial.println("Oil level RESTORED.");
-      sendTelegram("✅ Oil tank level restored — sensor detects oil above the line.");
+    // Fault tracking — only meaningful for ToF (digital readSensor() returns valid=true always)
+    if (cfgSensorType == SENSOR_TOF) {
+      if (!reading.valid) {
+        tofInvalidCount++;
+        if (tofInvalidCount == TOF_RECOVERY_CYCLES) {
+          Serial.println("ToF: attempting I2C bus recovery");
+          Wire.end();
+          Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+          tofSensor.begin();
+        }
+        if (tofInvalidCount == TOF_FAULT_CYCLES && !sensorFaultActive) {
+          sensorFaultActive = true;
+          sendTelegram("⚠️ Sensor fault — no valid reading for 25s. Check wiring.");
+        }
+      } else {
+        if (sensorFaultActive) {
+          Serial.println("ToF: readings recovered");
+          sensorFaultActive = false;
+        }
+        tofInvalidCount = 0;
+      }
     }
+    LevelState newState = bucketReading(reading, currentState);
+
+    if (currentState == LEVEL_UNKNOWN && newState != LEVEL_UNKNOWN) {
+      // Boot: first valid reading initializes silently. Online message handled in setup().
+      currentState = newState;
+      Serial.printf("Boot: initial level=%s\n", levelStateName(currentState));
+    } else if (newState != currentState && newState != LEVEL_UNKNOWN) {
+      Serial.printf("Transition: %s -> %s\n", levelStateName(currentState), levelStateName(newState));
+      fireTransitionMessage(currentState, newState);
+      currentState = newState;
+      if (newState == LEVEL_LOW || newState == LEVEL_OIL_LOW) lastAlertTime = now;
+    }
+
+    // Maintain legacy oilIsLow for /status backward compat
+    oilIsLow = (currentState == LEVEL_LOW || currentState == LEVEL_OIL_LOW);
   }
 
-  if (oilIsLow && (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
+  // Hourly LOW reminder — same behavior as v1.x, extended to cover IR break-beam
+  if ((currentState == LEVEL_LOW || currentState == LEVEL_OIL_LOW) &&
+      (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
     Serial.println("Sending hourly low-oil reminder.");
-    sendTelegram("⚠️ REMINDER: Oil tank is still LOW. Please refill.");
+    if (currentState == LEVEL_OIL_LOW) {
+      sendTelegram("⚠️ REMINDER: Sight-gauge puck still at the low-oil mark. Please refill.");
+    } else {
+      sendTelegram("⚠️ REMINDER: Oil tank is still LOW. Please refill.");
+    }
     lastAlertTime = now;
   }
 
