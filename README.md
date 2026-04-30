@@ -19,6 +19,7 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 - All settings saved to flash — survives power cycles
 - Auto-reconnects WiFi if the connection drops
 - Debounced sensor readings to prevent false alerts
+- **15-second hardware watchdog**: any infinite loop in the firmware auto-reboots the device. After recovery, a Telegram alert is sent so hangs do not go unnoticed.
 
 ## Hardware
 
