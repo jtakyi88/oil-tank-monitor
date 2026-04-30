@@ -25,6 +25,7 @@
 #include <Update.h>
 #include <Wire.h>
 #include <Adafruit_VL53L1X.h>
+#include "esp_task_wdt.h"
 
 // ===== SENSOR ABSTRACTION =====
 enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
@@ -759,6 +760,7 @@ bool connectWiFi() {
   WiFi.begin(cfgSSID.c_str(), cfgPassword.c_str());
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    esp_task_wdt_reset();
     delay(500);
     Serial.print(".");
     attempts++;
@@ -787,6 +789,7 @@ bool sendTelegram(const String& message) {
   String ids[] = {cfgChatID, cfgChatID2, cfgChatID3};
   for (int i = 0; i < 3; i++) {
     if (ids[i].length() > 0) {
+      esp_task_wdt_reset();
       bool sent = bot->sendMessage(ids[i].c_str(), message, "");
       Serial.println(sent ? ("Telegram sent to " + ids[i]) : ("Telegram FAILED for " + ids[i]));
       if (sent) anySent = true;
@@ -1022,6 +1025,18 @@ void setup() {
   delay(1000);
   Serial.println("\n=== Oil Tank Monitor Starting ===");
 
+  // Arduino-ESP32 v3 pre-initializes the TWDT with its own (shorter) default timeout.
+  // Reconfigure to our 15 s budget so Telegram POSTs and bus-recovery don't false-trigger.
+  esp_task_wdt_config_t wdt_config = {
+    .timeout_ms = 15000,        // 15 s
+    .idle_core_mask = 0,        // don't watch the idle tasks; we only care about the loop task
+    .trigger_panic = true,      // panic → reboot on miss
+  };
+  if (esp_task_wdt_reconfigure(&wdt_config) != ESP_OK) {
+    esp_task_wdt_init(&wdt_config);  // first-time init if no prior watchdog
+  }
+  esp_task_wdt_add(NULL);        // subscribe the current (Arduino loop) task
+
   initSensor();
   pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
 
@@ -1090,6 +1105,7 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();
   server.handleClient();
   checkResetButton();
 
@@ -1102,6 +1118,7 @@ void loop() {
         server.begin();
       }
     }
+    esp_task_wdt_reset();
     delay(100);
     return;
   }
