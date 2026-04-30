@@ -31,7 +31,7 @@ enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
-  bool digitalState;     // HIGH = object/liquid present; meaningful when SENSOR_DIGITAL
+  bool digitalState;     // HIGH = object/liquid present (DIGITAL) or beam clear (IR_BREAK); meaningful when SENSOR_DIGITAL or SENSOR_IR_BREAK
   uint16_t distanceMm;   // mm to puck; meaningful when SENSOR_TOF
 };
 
@@ -805,12 +805,12 @@ bool initSensor() {
 
 SensorReading readSensorRaw() {
   SensorReading r = { false, false, 0 };
-  if (cfgSensorType == SENSOR_DIGITAL) {
+  if (cfgSensorType == SENSOR_DIGITAL || cfgSensorType == SENSOR_IR_BREAK) {
     r.digitalState = (digitalRead(SENSOR_PIN) == HIGH);
     r.valid = true;
     return r;
   }
-  // ToF path — implemented in Task 4
+  // ToF path
   VL53L0X_RangingMeasurementData_t data;
   tofSensor.rangingTest(&data, false);
   if (data.RangeStatus == 4) {       // out of range / no signal
@@ -837,7 +837,7 @@ SensorReading readSensor() {
   static SensorReading lastRaw = { false, false, 0 };
   SensorReading raw = readSensorRaw();
 
-  if (cfgSensorType == SENSOR_DIGITAL) {
+  if (cfgSensorType == SENSOR_DIGITAL || cfgSensorType == SENSOR_IR_BREAK) {
     if (raw.digitalState == lastRaw.digitalState && raw.valid) {
       if (debounce < DEBOUNCE_COUNT) debounce++;
     } else {
@@ -846,7 +846,9 @@ SensorReading readSensor() {
     }
     if (debounce >= DEBOUNCE_COUNT) return raw;
     // Not yet stable — return last accepted reading
-    SensorReading last = { true, !oilIsLow, 0 };  // oilIsLow tracks "no liquid"
+    // oilIsLow is true when the last accepted state was LOW (digital) or OIL_LOW (IR_BREAK);
+    // !oilIsLow reconstructs the corresponding digitalState for the unstable-debounce fallback.
+    SensorReading last = { true, !oilIsLow, 0 };
     return last;
   }
   // ToF: take 3 readings ~50 ms apart, return the median (rejects single-shot spikes)
