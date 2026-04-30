@@ -27,7 +27,7 @@
 #include <Adafruit_VL53L0X.h>
 
 // ===== SENSOR ABSTRACTION =====
-enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1 };
+enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
@@ -40,6 +40,8 @@ enum LevelState {
   LEVEL_BELOW_HALF,    // cfgTofHalf < distance <= cfgTofLow
   LEVEL_ABOVE_HALF,    // cfgTofHigh < distance <= cfgTofHalf
   LEVEL_HIGH,          // distance <= cfgTofHigh (digital: liquid present)
+  LEVEL_OIL_OK,        // IR break-beam: beam clear (puck above low-oil mark)
+  LEVEL_OIL_LOW,       // IR break-beam: beam broken (puck has reached the mark)
   LEVEL_UNKNOWN        // no valid reading yet (boot)
 };
 
@@ -49,8 +51,11 @@ const char* levelStateName(LevelState s) {
     case LEVEL_BELOW_HALF: return "BELOW_HALF";
     case LEVEL_ABOVE_HALF: return "ABOVE_HALF";
     case LEVEL_HIGH:       return "HIGH";
-    default:               return "UNKNOWN";
+    case LEVEL_OIL_OK:     return "OIL_OK";
+    case LEVEL_OIL_LOW:    return "OIL_LOW";
+    case LEVEL_UNKNOWN:    return "UNKNOWN";
   }
+  return "UNKNOWN";
 }
 
 const int I2C_SDA_PIN = 21;            // ESP32 default
