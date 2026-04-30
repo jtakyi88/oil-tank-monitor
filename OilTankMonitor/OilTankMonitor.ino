@@ -933,6 +933,19 @@ void fireTransitionMessage(LevelState from, LevelState to) {
     }
     return;
   }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    if (from == LEVEL_OIL_OK && to == LEVEL_OIL_LOW) {
+      String msg = "⚠️ Low oil — sight-gauge puck has reached the low-oil mark. Please refill.";
+      msg += "\nSettings: http://" + WiFi.localIP().toString();
+      sendTelegram(msg);
+    } else if (from == LEVEL_OIL_LOW && to == LEVEL_OIL_OK) {
+      sendTelegram("✅ Oil level restored — puck is above the low-oil mark.");
+    }
+    return;
+  }
+  // Defensive: ToF matrix below uses ordinal (<=, >=) comparisons on LevelState.
+  // If the sensor type isn't ToF, exit before those run on out-of-mode states.
+  if (cfgSensorType != SENSOR_TOF) return;
   // ToF: full multi-state transition matrix
   if (from == LEVEL_LOW && to >= LEVEL_BELOW_HALF) {
     sendTelegram("✅ Oil tank above low mark — refill detected.");
@@ -1070,17 +1083,22 @@ void loop() {
       Serial.printf("Transition: %s -> %s\n", levelStateName(currentState), levelStateName(newState));
       fireTransitionMessage(currentState, newState);
       currentState = newState;
-      if (newState == LEVEL_LOW) lastAlertTime = now;
+      if (newState == LEVEL_LOW || newState == LEVEL_OIL_LOW) lastAlertTime = now;
     }
 
     // Maintain legacy oilIsLow for /status backward compat
-    oilIsLow = (currentState == LEVEL_LOW);
+    oilIsLow = (currentState == LEVEL_LOW || currentState == LEVEL_OIL_LOW);
   }
 
-  // Hourly LOW reminder — same behavior as v1.x, now keyed on currentState
-  if (currentState == LEVEL_LOW && (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
+  // Hourly LOW reminder — same behavior as v1.x, extended to cover IR break-beam
+  if ((currentState == LEVEL_LOW || currentState == LEVEL_OIL_LOW) &&
+      (now - lastAlertTime >= ALERT_INTERVAL_MS)) {
     Serial.println("Sending hourly low-oil reminder.");
-    sendTelegram("⚠️ REMINDER: Oil tank is still LOW. Please refill.");
+    if (currentState == LEVEL_OIL_LOW) {
+      sendTelegram("⚠️ REMINDER: Sight-gauge puck still at the low-oil mark. Please refill.");
+    } else {
+      sendTelegram("⚠️ REMINDER: Oil tank is still LOW. Please refill.");
+    }
     lastAlertTime = now;
   }
 
