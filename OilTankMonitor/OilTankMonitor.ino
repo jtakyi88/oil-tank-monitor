@@ -799,6 +799,36 @@ TofChip activeTofChip = TOF_NONE;
 int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
 bool sensorFaultActive = false; // Task 9
 
+// Detect which ToF chip is on the I2C bus. Tries VL53L1X first (more capable,
+// matches the user's TOF400C breakout), then falls back to VL53L0X.
+// On success, configures the chip and sets activeTofChip. Returns true on success.
+bool initTof() {
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  // VL53L1X first
+  if (tofL1x.begin(0x29, &Wire)) {
+    tofL1x.VL53L1X_SetDistanceMode(2);   // 2 = Long mode (~4 m range)
+    tofL1x.setTimingBudget(50);          // 50 ms per measurement
+    if (!tofL1x.startRanging()) {
+      Serial.println("VL53L1X detected but startRanging() failed — bailing out of ToF init");
+      activeTofChip = TOF_NONE;
+      return false;
+    }
+    activeTofChip = TOF_VL53L1X;
+    Serial.println("Sensor: TOF (VL53L1X, long mode) on I2C SDA="
+                   + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+    return true;
+  }
+  // Fallback to VL53L0X
+  if (tofL0x.begin()) {
+    activeTofChip = TOF_VL53L0X;
+    Serial.println("Sensor: TOF (VL53L0X) on I2C SDA="
+                   + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
+    return true;
+  }
+  activeTofChip = TOF_NONE;
+  return false;
+}
+
 bool initSensor() {
   if (cfgSensorType == SENSOR_DIGITAL) {
     pinMode(SENSOR_PIN, INPUT);
