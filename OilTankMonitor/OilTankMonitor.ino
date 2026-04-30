@@ -787,7 +787,13 @@ bool initSensor() {
     Serial.println("Sensor: DIGITAL on GPIO" + String(SENSOR_PIN));
     return true;
   }
-  // ToF path — implemented in Task 4
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    pinMode(SENSOR_PIN, INPUT_PULLUP);
+    Serial.println("Sensor: IR break-beam on GPIO" + String(SENSOR_PIN) +
+                   " (HIGH=clear, LOW=broken)");
+    return true;
+  }
+  // ToF path
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   if (!tofSensor.begin()) {
     Serial.println("Sensor: TOF init FAILED — check I2C wiring (SDA=21, SCL=22, VCC=3V3, GND=GND)");
