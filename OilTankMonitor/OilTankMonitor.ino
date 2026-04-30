@@ -114,6 +114,7 @@ SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgrad
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
+extern TofChip activeTofChip;   // defined with tofL0x/tofL1x near initTof()
 
 LevelState currentState = LEVEL_UNKNOWN;
 SensorReading lastReading = { false, false, 0 };
@@ -673,6 +674,13 @@ void handleStatus() {
     json += "\"half\":" + String(cfgTofHalf) + ",";
     json += "\"high\":" + String(cfgTofHigh);
     json += "}";
+    const char* tofChipName;
+    switch (activeTofChip) {
+      case TOF_VL53L0X: tofChipName = "vl53l0x"; break;
+      case TOF_VL53L1X: tofChipName = "vl53l1x"; break;
+      default:          tofChipName = "none"; break;
+    }
+    json += ",\"tof_chip\":\"" + String(tofChipName) + "\"";
   }
   if (cfgSensorType == SENSOR_IR_BREAK) {
     // Fresh pin read — beam_state is an instantaneous snapshot, not the debounced level.
