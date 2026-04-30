@@ -655,7 +655,13 @@ void handleStatus() {
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
-  json += "\"sensor_type\":\"" + String(cfgSensorType == SENSOR_DIGITAL ? "digital" : "tof") + "\",";
+  const char* sensorTypeName;
+  switch (cfgSensorType) {
+    case SENSOR_TOF:      sensorTypeName = "tof"; break;
+    case SENSOR_IR_BREAK: sensorTypeName = "ir_break"; break;
+    default:              sensorTypeName = "digital"; break;
+  }
+  json += "\"sensor_type\":\"" + String(sensorTypeName) + "\",";
   json += "\"sensor_valid\":" + String(lastReading.valid ? "true" : "false") + ",";
   json += "\"level\":\"" + String(levelStateName(currentState)) + "\"";
   if (cfgSensorType == SENSOR_TOF) {
@@ -665,6 +671,11 @@ void handleStatus() {
     json += "\"half\":" + String(cfgTofHalf) + ",";
     json += "\"high\":" + String(cfgTofHigh);
     json += "}";
+  }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    // Fresh pin read — beam_state is an instantaneous snapshot, not the debounced level.
+    bool clear = (digitalRead(SENSOR_PIN) == HIGH);
+    json += ",\"beam_state\":\"" + String(clear ? "clear" : "broken") + "\"";
   }
   json += "}";
   server.send(200, "application/json", json);
