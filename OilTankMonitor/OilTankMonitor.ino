@@ -485,6 +485,31 @@ String buildSavedPage() {
   return page;
 }
 
+void streamSavedPage() {
+  String targetIP = cfgStaticIP && cfgIP.length() > 0 ? cfgIP : WiFi.localIP().toString();
+  String targetURL = "http://" + targetIP;
+
+  streamHtmlHeader("Settings Saved");
+  server.sendContent(F("<h1>Settings Saved</h1>"
+                       "<div class='status'>"
+                       "Configuration saved. The device is restarting and connecting to <strong>"));
+  server.sendContent(cfgSSID);
+  server.sendContent(F("</strong>.<br><br>"
+                       "Redirecting to <strong>"));
+  server.sendContent(targetURL);
+  server.sendContent(F("</strong> in <span id='countdown'>15</span> seconds..."
+                       "</div>"
+                       "<script>"
+                       "var sec=15;var el=document.getElementById('countdown');"
+                       "var t=setInterval(function(){sec--;el.textContent=sec;"
+                       "if(sec<=0){clearInterval(t);window.location='"));
+  server.sendContent(targetURL);
+  server.sendContent(F("';}"
+                       "},1000);"
+                       "</script>"));
+  streamHtmlFooter();
+}
+
 String buildUpdatePage() {
   String page = htmlHeader("Firmware Update");
   page += "<h1>Firmware Update</h1>";
@@ -502,6 +527,28 @@ String buildUpdatePage() {
   page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
   page += htmlFooter();
   return page;
+}
+
+void streamUpdatePage() {
+  streamHtmlHeader("Firmware Update");
+  server.sendContent(F("<h1>Firmware Update</h1>"
+                       "<div class='status'>"
+                       "<strong>Current Version:</strong> v"));
+  server.sendContent(FW_VERSION);
+  server.sendContent(F("<br>"
+                       "<strong>Free Space:</strong> "));
+  server.sendContent(String(ESP.getFreeSketchSpace() / 1024));
+  server.sendContent(F(" KB"
+                       "</div>"
+                       "<p style='font-size:0.9em;'>Upload a compiled <code>.bin</code> firmware file. The device will flash itself and reboot.</p>"
+                       "<form method='POST' action='/update' enctype='multipart/form-data'>"
+                       "<label for='firmware'>Firmware File (.bin)</label>"
+                       "<input type='file' id='firmware' name='firmware' accept='.bin' required "
+                       "style='padding:10px;background:#16213e;border:1px solid #333;border-radius:6px;width:100%;box-sizing:border-box;'>"
+                       "<button type='submit' onclick=\"this.innerText='Uploading... do not power off';this.disabled=true;this.form.submit();\">Upload &amp; Install</button>"
+                       "</form>"
+                       "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>"));
+  streamHtmlFooter();
 }
 
 String buildUpdateResultPage(bool success, const String& message) {
@@ -524,6 +571,31 @@ String buildUpdateResultPage(bool success, const String& message) {
   }
   page += htmlFooter();
   return page;
+}
+
+void streamUpdateResultPage(bool success, const String& message) {
+  streamHtmlHeader(String("Update ") + (success ? "Complete" : "Failed"));
+  server.sendContent(F("<h1>Firmware Update "));
+  server.sendContent(success ? F("Complete") : F("Failed"));
+  server.sendContent(F("</h1>"
+                       "<div class='status"));
+  if (!success) server.sendContent(F(" warn"));
+  server.sendContent(F("'>"));
+  server.sendContent(message);
+  if (success) {
+    server.sendContent(F("<br><br>Redirecting in <span id='countdown'>15</span> seconds..."
+                         "</div>"
+                         "<script>"
+                         "var sec=15;var el=document.getElementById('countdown');"
+                         "var t=setInterval(function(){sec--;el.textContent=sec;"
+                         "if(sec<=0){clearInterval(t);window.location='/';}"
+                         "},1000);"
+                         "</script>"));
+  } else {
+    server.sendContent(F("</div>"
+                         "<div class='nav' style='margin-top:16px;'><a href='/update'>&larr; Try Again</a></div>"));
+  }
+  streamHtmlFooter();
 }
 
 // =====================================================================
@@ -640,12 +712,15 @@ void handleRoot() {
 }
 
 void sendValidationError(const String& message) {
-  String page = htmlHeader("Configuration Error");
-  page += "<h1>Configuration Error</h1>";
-  page += "<div class='status warn'>" + message + "</div>";
-  page += "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>";
-  page += htmlFooter();
-  server.send(400, "text/html", page);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(400, "text/html", "");
+  streamHtmlHeader("Configuration Error");
+  server.sendContent(F("<h1>Configuration Error</h1>"
+                       "<div class='status warn'>"));
+  server.sendContent(message);
+  server.sendContent(F("</div>"
+                       "<div class='nav' style='margin-top:16px;'><a href='/'>&larr; Back to Settings</a></div>"));
+  streamHtmlFooter();
 }
 
 void handleSave() {
@@ -705,22 +780,29 @@ void handleSave() {
   if (newPass.length() > 0) cfgWebPassword = newPass;
 
   saveSettings();
-  server.send(200, "text/html", buildSavedPage());
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamSavedPage();
   delay(2000);
   ESP.restart();
 }
 
 void handleFactoryReset() {
   if (!requireAuth()) return;
-  String page = htmlHeader("Factory Reset");
-  page += "<h1>Factory Reset Complete</h1>";
-  page += "<div class='status warn'>";
-  page += "All settings have been erased. The device is rebooting into setup mode.<br><br>";
-  page += "Connect to WiFi <strong>" + String(AP_SSID) + "</strong> (password: <strong>" + String(AP_PASSWORD) + "</strong>)<br>";
-  page += "Then open <strong>http://192.168.4.1</strong> to reconfigure.";
-  page += "</div>";
-  page += htmlFooter();
-  server.send(200, "text/html", page);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamHtmlHeader("Factory Reset");
+  server.sendContent(F("<h1>Factory Reset Complete</h1>"
+                       "<div class='status warn'>"
+                       "All settings have been erased. The device is rebooting into setup mode.<br><br>"
+                       "Connect to WiFi <strong>"));
+  server.sendContent(AP_SSID);
+  server.sendContent(F("</strong> (password: <strong>"));
+  server.sendContent(AP_PASSWORD);
+  server.sendContent(F("</strong>)<br>"
+                       "Then open <strong>http://192.168.4.1</strong> to reconfigure."
+                       "</div>"));
+  streamHtmlFooter();
   delay(2000);
   factoryReset();
 }
@@ -764,7 +846,9 @@ void handleStatus() {
 
 void handleUpdatePage() {
   if (!requireAuth()) return;
-  server.send(200, "text/html", buildUpdatePage());
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamUpdatePage();
 }
 
 void handleUpdateUpload() {
@@ -792,12 +876,14 @@ void handleUpdateUpload() {
 void handleUpdateResult() {
   if (!requireAuth()) return;
   bool success = !Update.hasError();
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
   if (success) {
-    server.send(200, "text/html", buildUpdateResultPage(true, "Firmware updated successfully."));
+    streamUpdateResultPage(true, "Firmware updated successfully.");
     delay(2000);
     ESP.restart();
   } else {
-    server.send(200, "text/html", buildUpdateResultPage(false, "Update failed. Please try again with a valid .bin file."));
+    streamUpdateResultPage(false, "Update failed. Please try again with a valid .bin file.");
   }
 }
 
