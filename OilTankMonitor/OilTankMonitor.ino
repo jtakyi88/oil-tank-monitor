@@ -301,6 +301,7 @@ String buildConfigPage() {
   page += "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>";
   page += "<option value='0'" + String(cfgSensorType == SENSOR_DIGITAL ? " selected" : "") + ">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>";
   page += "<option value='1'" + String(cfgSensorType == SENSOR_TOF ? " selected" : "") + ">ToF distance (VL53L0X)</option>";
+  page += "<option value='2'" + String(cfgSensorType == SENSOR_IR_BREAK ? " selected" : "") + ">IR break-beam (sight gauge puck)</option>";
   page += "</select>";
 
   page += "<div class='tof-fields" + String(cfgSensorType == SENSOR_TOF ? " show" : "") + "' id='tof-fields'>";
@@ -591,7 +592,9 @@ void handleSave() {
 
   if (server.hasArg("sensor_type")) {
     int t = server.arg("sensor_type").toInt();
-    newSensorType = (t == 1) ? SENSOR_TOF : SENSOR_DIGITAL;
+    if (t == 1) newSensorType = SENSOR_TOF;
+    else if (t == 2) newSensorType = SENSOR_IR_BREAK;
+    else newSensorType = SENSOR_DIGITAL;
   }
   if (server.hasArg("tof_low"))  newTofLow  = server.arg("tof_low").toInt();
   if (server.hasArg("tof_half")) newTofHalf = server.arg("tof_half").toInt();
