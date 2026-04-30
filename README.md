@@ -26,7 +26,7 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 |-----------|---------|-------|
 | ESP32 Dev Board | ESP-WROOM-32 with CP210x USB | [$9.99 (1-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Development-Microcontroller-Integrated/dp/B0718T232Z) or [$17.99 (3-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Bluetooth-ESP32-DevKitC-32-Development/dp/B0CNYK7WT2) |
 | XKC-Y25-V Sensor | Non-contact capacitive liquid level sensor | [$8.34 (1-pack)](https://www.amazon.com/caralin-XKC-Y25-V-Non-Contact-Liquid-Induction/dp/B0FT2CG9B2) or [$15.99 (4-pack)](https://www.amazon.com/DEVMO-Non-Contact-Induction-Detector-XKC-Y25-V/dp/B07TB3KZX7) |
-| ToF Module (VL53L0X or VL53L1X) | Time-of-Flight distance sensor (for dry mechanical float gauges; auto-detected) | [~$3-5](https://www.adafruit.com/product/3317) |
+| ToF Module (VL53L1X) | Time-of-Flight distance sensor (for dry mechanical float gauges) | [~$3-5](https://www.adafruit.com/product/3317) |
 | Jumper Wires | Female-to-female Dupont jumpers (or solder direct) | [$6.98](https://www.amazon.com/EDGELEC-Breadboard-Optional-Assorted-Multicolored/dp/B07GD2BWPY) |
 | USB Power Adapter | Any 5V/1A USB adapter | ~$5 |
 | USB Cable | Micro-USB **data** cable (not charge-only) | ~$5 |
@@ -38,9 +38,9 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 The firmware supports two sensor types, selectable at runtime from the web interface:
 
 - **Digital threshold** (default): single-threshold digital sensor on GPIO4. Works with the XKC-Y25-V capacitive sensor (for sight gauges containing actual liquid), an IR break-beam pair (for dry mechanical floats with an opaque puck), a reed switch + magnet, a Hall-effect sensor, or any other HIGH/LOW signal source. Single notification: tank LOW / restored.
-- **ToF distance** (VL53L0X or VL53L1X, auto-detected): mounted on top of the sight gauge, measures distance to the puck and reports four states: LOW, BELOW_HALF, ABOVE_HALF, HIGH. Bidirectional notifications — get a heads-up when the tank passes half empty, plus refill confirmations at half and high marks.
+- **ToF distance** (VL53L1X): mounted on top of the sight gauge, measures distance to the puck and reports four states: LOW, BELOW_HALF, ABOVE_HALF, HIGH. Bidirectional notifications — get a heads-up when the tank passes half empty, plus refill confirmations at half and high marks.
 
-Most installs with a working liquid sight gauge use the XKC-Y25-V (digital). Dry mechanical-float gauges typically use either an IR break-beam (digital) or a ToF sensor like VL53L0X or VL53L1X (auto-detected).
+Most installs with a working liquid sight gauge use the XKC-Y25-V (digital). Dry mechanical-float gauges typically use either an IR break-beam (digital) or a ToF sensor like VL53L1X.
 
 ### ESP32 Dev Board
 
@@ -70,16 +70,16 @@ Female-to-female Dupont jumpers connect the sensor's three leads directly to the
 
 Refer to the pin diagram above to locate the correct pins on your board.
 
-#### ToF Sensor Wiring (VL53L0X or VL53L1X)
+#### ToF Sensor Wiring (VL53L1X)
 
-| ToF Pin (VL53L0X/VL53L1X) | ESP32 Pin |
+| ToF Pin (VL53L1X) | ESP32 Pin |
 |-------------|-----------|
 | VCC | 3V3 (Pin 1) |
 | GND | GND (Pin 38) |
 | SDA | GPIO21 (Pin 33) |
 | SCL | GPIO22 (Pin 36) |
 
-Mount the ToF sensor (VL53L0X or VL53L1X) on top of the sight gauge looking down at the puck. The sensor reads distance in mm — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank). Both sensors share identical wiring and are auto-detected; VL53L1X offers extended range up to ~4 m.
+Mount the VL53L1X ToF sensor on top of the sight gauge looking down at the puck. The sensor reads distance in mm — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank). VL53L1X provides ranging up to ~4 m.
 
 ### Assembled Hardware
 
@@ -111,7 +111,6 @@ arduino-cli core install esp32:esp32
 # Install libraries
 arduino-cli lib install "UniversalTelegramBot"
 arduino-cli lib install "ArduinoJson"
-arduino-cli lib install "Adafruit_VL53L0X"
 arduino-cli lib install "Adafruit_VL53L1X"
 
 # Compile and upload
