@@ -808,6 +808,15 @@ bool sensorFaultActive = false; // Task 9
 // and starts continuous ranging. Sets activeTofChip on success. Returns true on success.
 bool initTof() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  // Fast NACK probe before tofL1x.begin(): the Adafruit/ST library's InitSensor()
+  // contains a `while(tmp==0)` poll on CheckForDataReady that never returns when
+  // no sensor is on the bus, freezing the entire Arduino loop. A 0x29 ping fails
+  // in <1 ms when nothing is wired and avoids that trap entirely.
+  Wire.beginTransmission(0x29);
+  if (Wire.endTransmission() != 0) {
+    activeTofChip = TOF_NONE;
+    return false;
+  }
   if (!tofL1x.begin(0x29, &Wire)) {
     activeTofChip = TOF_NONE;
     return false;
