@@ -266,6 +266,38 @@ String htmlFooter() {
   return "</div></body></html>";
 }
 
+void streamHtmlHeader(const String& title) {
+  server.sendContent(F("<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                       "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                       "<title>"));
+  server.sendContent(title);
+  server.sendContent(F("</title><style>"
+                       "body{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:20px;background:#1a1a2e;color:#e0e0e0;}"
+                       ".container{max-width:480px;margin:0 auto;}"
+                       "h1{color:#e94560;font-size:1.5em;border-bottom:2px solid #e94560;padding-bottom:8px;}"
+                       "h2{color:#0f3460;font-size:1.1em;margin-top:24px;color:#16c79a;}"
+                       "label{display:block;margin:12px 0 4px;font-weight:600;font-size:0.9em;}"
+                       "input[type=text],input[type=password]{width:100%;padding:10px;border:1px solid #333;border-radius:6px;"
+                       "  box-sizing:border-box;font-size:1em;background:#16213e;color:#e0e0e0;}"
+                       "input:focus{outline:none;border-color:#e94560;}"
+                       "button{background:#e94560;color:#fff;border:none;padding:12px 24px;border-radius:6px;"
+                       "  font-size:1em;cursor:pointer;margin-top:20px;width:100%;}"
+                       "button:hover{background:#c81e45;}"
+                       ".toggle{display:flex;align-items:center;gap:10px;margin:12px 0;}"
+                       ".toggle input{width:auto;}"
+                       ".status{background:#16213e;padding:16px;border-radius:8px;margin:16px 0;border-left:4px solid #16c79a;}"
+                       ".status.warn{border-left-color:#e94560;}"
+                       ".ip-fields,.tof-fields{display:none;}.ip-fields.show,.tof-fields.show{display:block;}"
+                       "a{color:#16c79a;}"
+                       ".nav{margin:16px 0;font-size:0.9em;}"
+                       ".eye-btn{background:none;border:none;color:#e0e0e0;cursor:pointer;font-size:1.2em;padding:8px;margin-top:0;width:auto;}"
+                       "</style></head><body><div class='container'>"));
+}
+
+void streamHtmlFooter() {
+  server.sendContent(F("</div></body></html>"));
+}
+
 String buildConfigPage() {
   String page = htmlHeader("Oil Tank Monitor - Settings");
 
@@ -554,6 +586,22 @@ String buildLoginPage(bool failed) {
   return page;
 }
 
+void streamLoginPage(bool failed) {
+  streamHtmlHeader("Oil Tank Monitor - Login");
+  server.sendContent(F("<h1>Oil Tank Monitor</h1>"));
+  if (failed) {
+    server.sendContent(F("<div class='status warn'>Invalid password. Try again.</div>"));
+  }
+  server.sendContent(F("<form method='POST' action='/login'>"
+                       "<label for='username'>Username</label>"
+                       "<input type='text' id='username' value='admin' disabled style='opacity:0.6;'>"
+                       "<label for='password'>Password</label>"
+                       "<input type='password' id='password' name='password' autofocus required>"
+                       "<button type='submit'>Log In</button>"
+                       "</form>"));
+  streamHtmlFooter();
+}
+
 // =====================================================================
 // Web server handlers
 // =====================================================================
@@ -569,10 +617,14 @@ void handleLogin() {
       server.send(302, "text/plain", "Login successful");
       return;
     }
-    server.send(200, "text/html", buildLoginPage(true));
+    server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+    server.send(200, "text/html", "");
+    streamLoginPage(true);
     return;
   }
-  server.send(200, "text/html", buildLoginPage(false));
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  streamLoginPage(false);
 }
 
 void handleLogout() {
