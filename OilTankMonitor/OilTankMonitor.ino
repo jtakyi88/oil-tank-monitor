@@ -879,6 +879,11 @@ LevelState bucketReading(const SensorReading& r, LevelState prev) {
     // Digital model: only LOW or HIGH (HIGH = liquid present)
     return r.digitalState ? LEVEL_HIGH : LEVEL_LOW;
   }
+  if (cfgSensorType == SENSOR_IR_BREAK) {
+    // Pin HIGH (with pullup) = beam detected = clear path = oil above low-oil mark.
+    // Pin LOW = beam broken (puck has reached the mark) = oil low.
+    return r.digitalState ? LEVEL_OIL_OK : LEVEL_OIL_LOW;
+  }
   // ToF: distance in mm; smaller = fuller. Hysteresis: require crossing by ±H.
   uint16_t d = r.distanceMm;
   uint16_t hyst = TOF_HYSTERESIS_MM;
