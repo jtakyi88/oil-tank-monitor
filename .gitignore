@@ -14,3 +14,7 @@ build/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Python virtualenvs
+.venv/
+venv/
