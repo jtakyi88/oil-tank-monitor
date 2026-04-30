@@ -856,24 +856,36 @@ SensorReading readSensorRaw() {
     r.valid = true;
     return r;
   }
-  // ToF path
-  // TODO(Task 5): dispatch on activeTofChip — currently this path only reads VL53L0X,
-  // so a detected VL53L1X will produce silent bad reads until Task 5 lands.
-  VL53L0X_RangingMeasurementData_t data;
-  tofL0x.rangingTest(&data, false);
-  if (data.RangeStatus == 4) {       // out of range / no signal
-    return r;                         // r.valid stays false
+  // ToF path — dispatch on detected chip
+  if (activeTofChip == TOF_VL53L0X) {
+    VL53L0X_RangingMeasurementData_t data;
+    tofL0x.rangingTest(&data, false);
+    if (data.RangeStatus == 4) return r;          // out of range / no signal
+    uint16_t mm = data.RangeMilliMeter;
+    // TOF_MAX_MM is 4000 to accommodate VL53L1X long mode. VL53L0X readings
+    // cap naturally at ~2000 mm and use RangeStatus 4 for out-of-signal, so
+    // the widened acceptance window is safe for both chips.
+    if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) return r;
+    r.distanceMm = mm;
+    r.valid = true;
+    return r;
   }
-  uint16_t mm = data.RangeMilliMeter;
-  // Note: TOF_MAX_MM is 4000 to accommodate VL53L1X long mode. The VL53L0X
-  // hardware naturally caps at ~2000 mm and uses RangeStatus 4 for out-of-signal,
-  // so the widened acceptance window is safe for both chips.
-  if (mm < TOF_MIN_MM || mm > TOF_MAX_MM) {
-    return r;                         // out of accepted range
+  if (activeTofChip == TOF_VL53L1X) {
+    if (!tofL1x.dataReady()) return r;            // measurement not ready; debounce will skip this read
+    // INVARIANT: once dataReady() is true, distance/GetRangeStatus/clearInterrupt MUST run
+    // back-to-back with no early returns between them. Skipping clearInterrupt() leaves the
+    // chip stuck — dataReady() will never re-assert. Validation guards live AFTER clearInterrupt.
+    int16_t mm = tofL1x.distance();               // signed; -1 on error
+    uint8_t status = 0xFF;
+    tofL1x.VL53L1X_GetRangeStatus(&status);
+    tofL1x.clearInterrupt();                      // arm next measurement (must run before any return below)
+    if (status != 0 || mm < 0) return r;
+    if ((uint16_t)mm < TOF_MIN_MM || (uint16_t)mm > TOF_MAX_MM) return r;
+    r.distanceMm = (uint16_t)mm;
+    r.valid = true;
+    return r;
   }
-  r.distanceMm = mm;
-  r.valid = true;
-  return r;
+  return r;  // TOF_NONE — should not occur in normal flow
 }
 
 uint16_t medianOf3(uint16_t a, uint16_t b, uint16_t c) {
