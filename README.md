@@ -36,12 +36,13 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 
 ### Choosing a Sensor
 
-The firmware supports two sensor types, selectable at runtime from the web interface:
+The firmware supports three sensor types, selectable at runtime from the web interface:
 
-- **Digital threshold** (default): single-threshold digital sensor on GPIO4. Works with the XKC-Y25-V capacitive sensor (for sight gauges containing actual liquid), an IR break-beam pair (for dry mechanical floats with an opaque puck), a reed switch + magnet, a Hall-effect sensor, or any other HIGH/LOW signal source. Single notification: tank LOW / restored.
+- **Digital threshold** (default): single-threshold digital sensor on GPIO4. Designed for the XKC-Y25-V capacitive sensor on sight gauges containing actual liquid. Single notification: tank LOW / restored.
+- **IR break-beam**: emitter/receiver pair on GPIO4, used to detect an opaque puck inside a dry mechanical-float sight gauge. Single notification: tank LOW / restored.
 - **ToF distance** (VL53L1X): mounted on top of the sight gauge, measures distance to the puck and reports four states: LOW, BELOW_HALF, ABOVE_HALF, HIGH. Bidirectional notifications — get a heads-up when the tank passes half empty, plus refill confirmations at half and high marks.
 
-Most installs with a working liquid sight gauge use the XKC-Y25-V (digital). Dry mechanical-float gauges typically use either an IR break-beam (digital) or a ToF sensor like VL53L1X.
+Most installs with a working liquid sight gauge use the XKC-Y25-V. Dry mechanical-float gauges typically use either an IR break-beam or a ToF sensor like VL53L1X.
 
 ### ESP32 Dev Board
 
@@ -71,7 +72,25 @@ Female-to-female Dupont jumpers connect the sensor's three leads directly to the
 
 Refer to the pin diagram above to locate the correct pins on your board.
 
+#### IR Break-Beam Wiring
+
+![IR Break-Beam Emitter and Receiver Pair](images/IR_Break_Beam_TX_RX.jpg)
+
+An IR break-beam pair is an emitter (red + black wires, power only) and a receiver (red + black + white wires, where white is the digital output). Mount them facing each other across the sight gauge so the opaque puck breaks the beam at low oil.
+
+| IR Wire | ESP32 Pin |
+|---------|-----------|
+| Emitter — Red | 3V3 (Pin 1) |
+| Emitter — Black | GND (Pin 38) |
+| Receiver — Red | 3V3 (Pin 1) |
+| Receiver — Black | GND (Pin 38) |
+| Receiver — White (signal) | GPIO4 / D4 (Pin 26) |
+
+The receiver pin is configured `INPUT_PULLUP` in firmware. HIGH = beam clear (oil present), LOW = beam broken (low oil).
+
 #### ToF Sensor Wiring (VL53L1X)
+
+![TOF400C breakout (VL53L1X chip)](images/TOF400C-VL53L1X.jpg)
 
 | ToF Pin (VL53L1X) | ESP32 Pin |
 |-------------|-----------|

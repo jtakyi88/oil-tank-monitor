@@ -356,7 +356,7 @@ void streamConfigPage() {
                        "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>"
                        "<option value='0'"));
   if (cfgSensorType == SENSOR_DIGITAL) server.sendContent(F(" selected"));
-  server.sendContent(F(">Digital threshold (XKC-Y25-V, IR break-beam, reed switch, etc.)</option>"
+  server.sendContent(F(">Digital threshold (XKC-Y25-V)</option>"
                        "<option value='1'"));
   if (cfgSensorType == SENSOR_TOF) server.sendContent(F(" selected"));
   server.sendContent(F(">ToF distance (VL53L1X)</option>"
