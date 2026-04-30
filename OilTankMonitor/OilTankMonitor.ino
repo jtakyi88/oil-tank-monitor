@@ -807,11 +807,32 @@ TofChip activeTofChip = TOF_NONE;
 int tofInvalidCount = 0;        // consecutive invalid reads (Task 9)
 bool sensorFaultActive = false; // Task 9
 
+// TEMP DIAGNOSTIC: scan I2C bus and return space-separated list of addresses (e.g. "0x29 0x40"),
+// or "(none)" if nothing responds. Remove once ToF detection is debugged.
+String scanI2cBus() {
+  String result = "";
+  int found = 0;
+  for (uint8_t addr = 0x08; addr < 0x78; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      if (found > 0) result += " ";
+      result += "0x";
+      if (addr < 0x10) result += "0";
+      result += String(addr, HEX);
+      found++;
+    }
+  }
+  if (found == 0) result = "(none)";
+  return result;
+}
+
 // Detect which ToF chip is on the I2C bus. Tries VL53L1X first (more capable,
 // matches the user's TOF400C breakout), then falls back to VL53L0X.
 // On success, configures the chip and sets activeTofChip. Returns true on success.
 bool initTof() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  String i2cDevices = scanI2cBus();   // TEMP DIAGNOSTIC
+  Serial.println("I2C scan at start of initTof(): " + i2cDevices);
   // VL53L1X first
   if (tofL1x.begin(0x29, &Wire)) {
     tofL1x.VL53L1X_SetDistanceMode(2);   // 2 = Long mode (~4 m range)
@@ -1069,7 +1090,11 @@ void setup() {
       initBot();
       // If ToF init silently failed earlier, alert now that we have Telegram
       if (cfgSensorType == SENSOR_TOF && activeTofChip == TOF_NONE) {
-        sendTelegram("⚠️ ToF init failed — neither VL53L0X nor VL53L1X responded on I2C. Check wiring or switch sensor type via web UI.");
+        // TEMP DIAGNOSTIC: append I2C bus scan to help diagnose wiring
+        String diag = "⚠️ ToF init failed — neither VL53L0X nor VL53L1X responded on I2C.\n";
+        diag += "I2C devices found: " + scanI2cBus() + "\n";
+        diag += "Expected: 0x29 (VL53L0X/VL53L1X). Check wiring or switch sensor type via web UI.";
+        sendTelegram(diag);
       }
       // Take an initial sensor reading to establish currentState before announcing online.
       delay(200);  // let sensor stabilize
