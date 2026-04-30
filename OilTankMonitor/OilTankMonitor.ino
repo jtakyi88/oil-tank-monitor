@@ -990,8 +990,14 @@ void setup() {
   checkResetButton();
 
   loadSettings();
+  const char* bootSensorTypeName;
+  switch (cfgSensorType) {
+    case SENSOR_TOF:      bootSensorTypeName = "TOF"; break;
+    case SENSOR_IR_BREAK: bootSensorTypeName = "IR_BREAK"; break;
+    default:              bootSensorTypeName = "DIGITAL"; break;
+  }
   Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
-                cfgSensorType == SENSOR_DIGITAL ? "DIGITAL" : "TOF",
+                bootSensorTypeName,
                 cfgTofLow, cfgTofHalf, cfgTofHigh);
 
   if (!configured) {
@@ -1015,7 +1021,11 @@ void setup() {
       Serial.printf("Boot: initial state=%s (after WiFi connect)\n", levelStateName(currentState));
 
       String msg = "🛢️ Oil tank monitor is ONLINE.\nSensor: ";
-      msg += (cfgSensorType == SENSOR_DIGITAL ? "Digital" : "ToF");
+      switch (cfgSensorType) {
+        case SENSOR_TOF:      msg += "ToF"; break;
+        case SENSOR_IR_BREAK: msg += "IR break-beam (sight gauge)"; break;
+        default:              msg += "Digital"; break;
+      }
       msg += "\nLevel: " + String(levelStateName(currentState));
       if (cfgSensorType == SENSOR_TOF && r.valid) {
         msg += " (" + String(r.distanceMm) + "mm)";
