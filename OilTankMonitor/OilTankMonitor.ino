@@ -841,13 +841,11 @@ bool initSensor() {
                    " (HIGH=clear, LOW=broken)");
     return true;
   }
-  // ToF path
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  if (!tofL0x.begin()) {
-    Serial.println("Sensor: TOF init FAILED — check I2C wiring (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+  // ToF path — auto-detect VL53L1X or VL53L0X
+  if (!initTof()) {
+    Serial.println("Sensor: TOF init FAILED — neither VL53L1X nor VL53L0X responded on I2C (SDA=21, SCL=22, VCC=3V3, GND=GND)");
     return false;
   }
-  Serial.println("Sensor: TOF (VL53L0X) on I2C SDA=" + String(I2C_SDA_PIN) + " SCL=" + String(I2C_SCL_PIN));
   return true;
 }
 
@@ -859,6 +857,8 @@ SensorReading readSensorRaw() {
     return r;
   }
   // ToF path
+  // TODO(Task 5): dispatch on activeTofChip — currently this path only reads VL53L0X,
+  // so a detected VL53L1X will produce silent bad reads until Task 5 lands.
   VL53L0X_RangingMeasurementData_t data;
   tofL0x.rangingTest(&data, false);
   if (data.RangeStatus == 4) {       // out of range / no signal
@@ -1048,8 +1048,8 @@ void setup() {
       apMode = false;
       initBot();
       // If ToF init silently failed earlier, alert now that we have Telegram
-      if (cfgSensorType == SENSOR_TOF && !tofL0x.begin()) {
-        sendTelegram("⚠️ ToF init failed — check I2C wiring or switch sensor type via web UI.");
+      if (cfgSensorType == SENSOR_TOF && activeTofChip == TOF_NONE) {
+        sendTelegram("⚠️ ToF init failed — neither VL53L0X nor VL53L1X responded on I2C. Check wiring or switch sensor type via web UI.");
       }
       // Take an initial sensor reading to establish currentState before announcing online.
       delay(200);  // let sensor stabilize
@@ -1119,8 +1119,7 @@ void loop() {
         if (tofInvalidCount == TOF_RECOVERY_CYCLES) {
           Serial.println("ToF: attempting I2C bus recovery");
           Wire.end();
-          Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-          tofL0x.begin();
+          initTof();   // re-runs detection and reconfigures whichever chip responds
         }
         if (tofInvalidCount == TOF_FAULT_CYCLES && !sensorFaultActive) {
           sensorFaultActive = true;
