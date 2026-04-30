@@ -60,6 +60,30 @@ const char* levelStateName(LevelState s) {
   return "UNKNOWN";
 }
 
+const char* sensorTypeJsonName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "tof";
+    case SENSOR_IR_BREAK: return "ir_break";
+    default:              return "digital";
+  }
+}
+
+const char* sensorTypeBootName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "TOF";
+    case SENSOR_IR_BREAK: return "IR_BREAK";
+    default:              return "DIGITAL";
+  }
+}
+
+const char* sensorTypeDisplayName(SensorType t) {
+  switch (t) {
+    case SENSOR_TOF:      return "ToF";
+    case SENSOR_IR_BREAK: return "IR break-beam (sight gauge)";
+    default:              return "Digital";
+  }
+}
+
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
@@ -658,13 +682,9 @@ void handleStatus() {
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
-  const char* sensorTypeName;
-  switch (cfgSensorType) {
-    case SENSOR_TOF:      sensorTypeName = "tof"; break;
-    case SENSOR_IR_BREAK: sensorTypeName = "ir_break"; break;
-    default:              sensorTypeName = "digital"; break;
-  }
-  json += "\"sensor_type\":\"" + String(sensorTypeName) + "\",";
+  json += "\"sensor_type\":\"";
+  json += sensorTypeJsonName(cfgSensorType);
+  json += "\",";
   json += "\"sensor_valid\":" + String(lastReading.valid ? "true" : "false") + ",";
   json += "\"level\":\"" + String(levelStateName(currentState)) + "\"";
   if (cfgSensorType == SENSOR_TOF) {
@@ -1050,14 +1070,8 @@ void setup() {
   checkResetButton();
 
   loadSettings();
-  const char* bootSensorTypeName;
-  switch (cfgSensorType) {
-    case SENSOR_TOF:      bootSensorTypeName = "TOF"; break;
-    case SENSOR_IR_BREAK: bootSensorTypeName = "IR_BREAK"; break;
-    default:              bootSensorTypeName = "DIGITAL"; break;
-  }
   Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
-                bootSensorTypeName,
+                sensorTypeBootName(cfgSensorType),
                 cfgTofLow, cfgTofHalf, cfgTofHigh);
 
   if (!configured) {
@@ -1081,11 +1095,7 @@ void setup() {
       Serial.printf("Boot: initial state=%s (after WiFi connect)\n", levelStateName(currentState));
 
       String msg = "🛢️ Oil tank monitor is ONLINE.\nSensor: ";
-      switch (cfgSensorType) {
-        case SENSOR_TOF:      msg += "ToF"; break;
-        case SENSOR_IR_BREAK: msg += "IR break-beam (sight gauge)"; break;
-        default:              msg += "Digital"; break;
-      }
+      msg += sensorTypeDisplayName(cfgSensorType);
       msg += "\nLevel: " + String(levelStateName(currentState));
       if (cfgSensorType == SENSOR_TOF && r.valid) {
         msg += " (" + String(r.distanceMm) + "mm)";
