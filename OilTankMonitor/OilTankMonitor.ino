@@ -30,6 +30,7 @@
 // ===== SENSOR ABSTRACTION =====
 enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
 enum TofChip { TOF_NONE, TOF_VL53L1X };
+enum Units { UNITS_METRIC = 0, UNITS_IMPERIAL = 1 };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
@@ -84,6 +85,37 @@ const char* sensorTypeDisplayName(SensorType t) {
   }
 }
 
+extern Units cfgUnits;  // defined with runtime state below
+
+const char* unitsLabel(Units u) {
+  return (u == UNITS_IMPERIAL) ? "in" : "mm";
+}
+
+String formatDistance(uint16_t mm) {
+  if (cfgUnits == UNITS_IMPERIAL) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.2f", mm / 25.4f);
+    return String(buf);
+  }
+  return String(mm);
+}
+
+bool parseDistanceInput(const String& s, uint16_t& outMm) {
+  if (s.length() == 0) return false;
+  float v = s.toFloat();
+  if (v <= 0.0f) return false;
+  if (cfgUnits == UNITS_IMPERIAL) {
+    long mm = lroundf(v * 25.4f);
+    if (mm < 0 || mm > 65535) return false;
+    outMm = (uint16_t)mm;
+  } else {
+    long mm = (long)v;
+    if (mm < 0 || mm > 65535) return false;
+    outMm = (uint16_t)mm;
+  }
+  return true;
+}
+
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
@@ -135,6 +167,7 @@ String cfgWebPassword = "admin";
 
 // Sensor configuration
 SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgraders
+Units cfgUnits = UNITS_METRIC;               // default — preserves pre-toggle output
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
@@ -205,6 +238,7 @@ void loadSettings() {
   cfgTofLow     = prefs.getUShort("tof_low", 200);
   cfgTofHalf    = prefs.getUShort("tof_half", 130);
   cfgTofHigh    = prefs.getUShort("tof_high", 60);
+  cfgUnits      = (Units)prefs.getUChar("units", 0);
   prefs.end();
   configured = (cfgSSID.length() > 0 && cfgBotToken.length() > 0 && cfgChatID.length() > 0);
 }
@@ -227,6 +261,7 @@ void saveSettings() {
   prefs.putUShort("tof_low", cfgTofLow);
   prefs.putUShort("tof_half", cfgTofHalf);
   prefs.putUShort("tof_high", cfgTofHigh);
+  prefs.putUChar("units", (uint8_t)cfgUnits);
   prefs.end();
 }
 
@@ -1149,9 +1184,15 @@ void setup() {
   checkResetButton();
 
   loadSettings();
-  Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
+  String tlow  = formatDistance(cfgTofLow);
+  String thalf = formatDistance(cfgTofHalf);
+  String thigh = formatDistance(cfgTofHigh);
+  const char* u = unitsLabel(cfgUnits);
+  Serial.printf("Sensor type: %s | ToF thresholds: low=%s %s half=%s %s high=%s %s\n",
                 sensorTypeBootName(cfgSensorType),
-                cfgTofLow, cfgTofHalf, cfgTofHigh);
+                tlow.c_str(),  u,
+                thalf.c_str(), u,
+                thigh.c_str(), u);
 
   if (!configured) {
     Serial.println("No configuration found — starting AP mode.");
@@ -1177,7 +1218,7 @@ void setup() {
       msg += sensorTypeDisplayName(cfgSensorType);
       msg += "\nLevel: " + String(levelStateName(currentState));
       if (cfgSensorType == SENSOR_TOF && r.valid) {
-        msg += " (" + String(r.distanceMm) + "mm)";
+        msg += " (" + formatDistance(r.distanceMm) + " " + unitsLabel(cfgUnits) + ")";
       }
       msg += "\nSettings: http://" + WiFi.localIP().toString();
       sendTelegram(msg);
