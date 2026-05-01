@@ -44,6 +44,8 @@ The firmware supports three sensor types, selectable at runtime from the web int
 
 Most installs with a working liquid sight gauge use the XKC-Y25-V. Dry mechanical-float gauges typically use either an IR break-beam or a ToF sensor like VL53L1X.
 
+The web interface has a **Display Units** toggle (Metric / US Customary) that controls how distances are shown and accepted across the UI, the `/status` JSON poll, Telegram alerts, and the boot serial log. Internal storage is always in millimeters; the toggle only affects display and form-input layers, so switching units never changes the underlying configuration.
+
 ### ESP32 Dev Board
 
 ![ESP32-WROOM-32 Development Board](images/ESP-32.jpg)
@@ -99,7 +101,7 @@ The receiver pin is configured `INPUT_PULLUP` in firmware. HIGH = beam clear (oi
 | SDA | GPIO21 (Pin 33) |
 | SCL | GPIO22 (Pin 36) |
 
-Mount the VL53L1X ToF sensor on top of the sight gauge looking down at the puck. The sensor reads distance in mm — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank). VL53L1X provides ranging up to ~4 m.
+Mount the VL53L1X ToF sensor on top of the sight gauge looking down at the puck. The sensor reads distance — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank). VL53L1X provides ranging up to ~4 m. Threshold values can be entered in millimeters or in inches per the **Display Units** preference; storage is always in millimeters.
 
 ### Assembled Hardware
 
