@@ -411,7 +411,9 @@ void streamConfigPage() {
                        "<div class='tof-fields"));
   if (cfgSensorType == SENSOR_TOF) server.sendContent(F(" show"));
   server.sendContent(F("' id='tof-fields'>"
-                       "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> <span id='tof-unit'>mm</span></div>"
+                       "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> <span id='tof-unit'>"));
+  server.sendContent(unitsLabel(cfgUnits));
+  server.sendContent(F("</span></div>"
                        "<label for='tof_low'>LOW threshold ("));
   server.sendContent(unitsLabel(cfgUnits));
   server.sendContent(F(") — alert below this</label>"
