@@ -518,7 +518,7 @@ void streamConfigPage() {
                        "    fetch('/status').then(r=>r.json()).then(j=>{"
                        "      var el=document.getElementById('tof-distance');"
                        "      if(!el) return;"
-                       "      if(j.distance_mm===undefined){el.textContent='—';return;}"
+                       "      if(j.distance_mm===undefined||!j.sensor_valid){el.textContent='—';return;}"
                        "      var u=document.getElementById('units').value;"
                        "      el.textContent=(u==='1')?(j.distance_mm/25.4).toFixed(2):j.distance_mm;"
                        "    }).catch(()=>{});"
