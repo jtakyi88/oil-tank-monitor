@@ -103,6 +103,8 @@ The receiver pin is configured `INPUT_PULLUP` in firmware. HIGH = beam clear (oi
 
 Mount the VL53L1X ToF sensor on top of the sight gauge looking down at the puck. The sensor reads distance — smaller value means the puck is near the top (fuller tank), larger value means it has dropped (emptier tank). VL53L1X provides ranging up to ~4 m. Threshold values can be entered in millimeters or in inches per the **Display Units** preference; storage is always in millimeters.
 
+![Telegram messages from a device running in ToF mode — bidirectional LOW/HALF/HIGH state transitions, sensor-fault alerts, and ONLINE recovery](images/ToF_Telegram_Message.png)
+
 ### Assembled Hardware
 
 ![Assembled ESP32 + XKC-Y25-V on USB power](images/Exposed_Working_Sensor_With_Power.jpg)
