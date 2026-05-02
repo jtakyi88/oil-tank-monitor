@@ -30,6 +30,7 @@
 // ===== SENSOR ABSTRACTION =====
 enum SensorType { SENSOR_DIGITAL = 0, SENSOR_TOF = 1, SENSOR_IR_BREAK = 2 };
 enum TofChip { TOF_NONE, TOF_VL53L1X };
+enum Units { UNITS_METRIC = 0, UNITS_IMPERIAL = 1 };
 
 struct SensorReading {
   bool valid;            // false on hardware fault (I2C timeout, ToF out-of-range)
@@ -84,6 +85,37 @@ const char* sensorTypeDisplayName(SensorType t) {
   }
 }
 
+extern Units cfgUnits;  // defined with runtime state below
+
+const char* unitsLabel(Units u) {
+  return (u == UNITS_IMPERIAL) ? "in" : "mm";
+}
+
+String formatDistance(uint16_t mm) {
+  if (cfgUnits == UNITS_IMPERIAL) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.2f", mm / 25.4f);
+    return String(buf);
+  }
+  return String(mm);
+}
+
+bool parseDistanceInput(const String& s, uint16_t& outMm) {
+  if (s.length() == 0) return false;
+  float v = s.toFloat();
+  if (v <= 0.0f) return false;  // toFloat() returns 0 on parse failure; also rejects literal 0
+  if (cfgUnits == UNITS_IMPERIAL) {
+    long mm = lroundf(v * 25.4f);
+    if (mm < 0 || mm > 65535) return false;
+    outMm = (uint16_t)mm;
+  } else {
+    long mm = (long)v;
+    if (mm < 0 || mm > 65535) return false;
+    outMm = (uint16_t)mm;
+  }
+  return true;
+}
+
 const int I2C_SDA_PIN = 21;            // ESP32 default
 const int I2C_SCL_PIN = 22;            // ESP32 default
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
@@ -135,6 +167,7 @@ String cfgWebPassword = "admin";
 
 // Sensor configuration
 SensorType cfgSensorType = SENSOR_DIGITAL;   // default — protects v1.x upgraders
+Units cfgUnits = UNITS_METRIC;               // default — preserves pre-toggle output
 uint16_t cfgTofLow  = 200;                   // mm — alert threshold
 uint16_t cfgTofHalf = 130;                   // mm — half mark
 uint16_t cfgTofHigh = 60;                    // mm — refill complete
@@ -205,6 +238,7 @@ void loadSettings() {
   cfgTofLow     = prefs.getUShort("tof_low", 200);
   cfgTofHalf    = prefs.getUShort("tof_half", 130);
   cfgTofHigh    = prefs.getUShort("tof_high", 60);
+  cfgUnits      = (Units)prefs.getUChar("units", 0);
   prefs.end();
   configured = (cfgSSID.length() > 0 && cfgBotToken.length() > 0 && cfgChatID.length() > 0);
 }
@@ -227,6 +261,7 @@ void saveSettings() {
   prefs.putUShort("tof_low", cfgTofLow);
   prefs.putUShort("tof_half", cfgTofHalf);
   prefs.putUShort("tof_high", cfgTofHigh);
+  prefs.putUChar("units", (uint8_t)cfgUnits);
   prefs.end();
 }
 
@@ -352,6 +387,15 @@ void streamConfigPage() {
                        "</div>"
                        // Sensor Configuration
                        "<h2>Sensor Configuration</h2>"
+                       "<label for='units'>Display Units</label>"
+                       "<select id='units' name='units' onchange='convertUnits()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>"
+                       "<option value='0'"));
+  if (cfgUnits == UNITS_METRIC) server.sendContent(F(" selected"));
+  server.sendContent(F(">Metric (mm)</option>"
+                       "<option value='1'"));
+  if (cfgUnits == UNITS_IMPERIAL) server.sendContent(F(" selected"));
+  server.sendContent(F(">US Customary (inches)</option>"
+                       "</select>"
                        "<label for='sensor_type'>Sensor Type</label>"
                        "<select id='sensor_type' name='sensor_type' onchange='toggleTof()' style='width:100%;padding:10px;background:#16213e;color:#e0e0e0;border:1px solid #333;border-radius:6px;'>"
                        "<option value='0'"));
@@ -367,20 +411,28 @@ void streamConfigPage() {
                        "<div class='tof-fields"));
   if (cfgSensorType == SENSOR_TOF) server.sendContent(F(" show"));
   server.sendContent(F("' id='tof-fields'>"
-                       "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> mm</div>"
-                       "<label for='tof_low'>LOW threshold (mm) — alert below this</label>"
+                       "<div class='status' id='tof-live' style='margin-top:12px;'>Current Reading: <span id='tof-distance'>—</span> <span id='tof-unit'>"));
+  server.sendContent(unitsLabel(cfgUnits));
+  server.sendContent(F("</span></div>"
+                       "<label for='tof_low'>LOW threshold ("));
+  server.sendContent(unitsLabel(cfgUnits));
+  server.sendContent(F(") — alert below this</label>"
                        "<input type='text' id='tof_low' name='tof_low' value='"));
-  server.sendContent(String(cfgTofLow));
+  server.sendContent(formatDistance(cfgTofLow));
   server.sendContent(F("'>"
-                       "<label for='tof_half'>HALF threshold (mm)</label>"
+                       "<label for='tof_half'>HALF threshold ("));
+  server.sendContent(unitsLabel(cfgUnits));
+  server.sendContent(F(")</label>"
                        "<input type='text' id='tof_half' name='tof_half' value='"));
-  server.sendContent(String(cfgTofHalf));
+  server.sendContent(formatDistance(cfgTofHalf));
   server.sendContent(F("'>"
-                       "<label for='tof_high'>HIGH threshold (mm) — refill complete above this</label>"
+                       "<label for='tof_high'>HIGH threshold ("));
+  server.sendContent(unitsLabel(cfgUnits));
+  server.sendContent(F(") — refill complete above this</label>"
                        "<input type='text' id='tof_high' name='tof_high' value='"));
-  server.sendContent(String(cfgTofHigh));
+  server.sendContent(formatDistance(cfgTofHigh));
   server.sendContent(F("'>"
-                       "<p style='font-size:0.85em;color:#999;'>Smaller mm = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm.</p>"
+                       "<p style='font-size:0.85em;color:#999;'>Smaller value = puck closer to sensor (fuller tank). Must satisfy HIGH &lt; HALF &lt; LOW. Range: 30–2000 mm (1.18–78.74 in).</p>"
                        "</div>"
                        // Network
                        "<h2>Network Settings</h2>"
@@ -443,6 +495,23 @@ void streamConfigPage() {
                        "  var v=document.getElementById('sensor_type').value;"
                        "  document.getElementById('tof-fields').classList.toggle('show', v==='1');"
                        "}"
+                       "function convertUnits(){"
+                       "  var u=document.getElementById('units').value;"
+                       "  var ids=['tof_low','tof_half','tof_high'];"
+                       "  for(var i=0;i<ids.length;i++){"
+                       "    var f=document.getElementById(ids[i]);"
+                       "    var v=parseFloat(f.value);"
+                       "    if(isNaN(v)) continue;"
+                       "    f.value=(u==='1')?(v/25.4).toFixed(2):Math.round(v*25.4).toString();"
+                       "  }"
+                       "  var labels=document.querySelectorAll(\"label[for='tof_low'],label[for='tof_half'],label[for='tof_high']\");"
+                       "  var symbol=(u==='1')?'in':'mm';"
+                       "  labels[0].innerHTML='LOW threshold ('+symbol+') — alert below this';"
+                       "  labels[1].innerHTML='HALF threshold ('+symbol+')';"
+                       "  labels[2].innerHTML='HIGH threshold ('+symbol+') — refill complete above this';"
+                       "  var unitSpan=document.getElementById('tof-unit');"
+                       "  if(unitSpan) unitSpan.textContent=symbol;"
+                       "}"
                        "var tofPoll=null;"
                        "function startTofPoll(){"
                        "  if(tofPoll) clearInterval(tofPoll);"
@@ -450,8 +519,10 @@ void streamConfigPage() {
                        "    if(document.getElementById('sensor_type').value!=='1'){clearInterval(tofPoll);tofPoll=null;return;}"
                        "    fetch('/status').then(r=>r.json()).then(j=>{"
                        "      var el=document.getElementById('tof-distance');"
-                       "      if(el && j.distance_mm!==undefined){el.textContent=j.distance_mm;}"
-                       "      else if(el){el.textContent='—';}"
+                       "      if(!el) return;"
+                       "      if(j.distance_mm===undefined||!j.sensor_valid){el.textContent='—';return;}"
+                       "      var u=document.getElementById('units').value;"
+                       "      el.textContent=(u==='1')?(j.distance_mm/25.4).toFixed(2):j.distance_mm;"
                        "    }).catch(()=>{});"
                        "  },2000);"
                        "}"
@@ -681,6 +752,7 @@ void handleSave() {
   // Sensor configuration — stage into locals first, validate, then commit to globals.
   // This prevents in-memory corruption if validation fails (NVS is also untouched on failure).
   SensorType newSensorType = cfgSensorType;
+  Units newUnits = cfgUnits;
   uint16_t newTofLow  = cfgTofLow;
   uint16_t newTofHalf = cfgTofHalf;
   uint16_t newTofHigh = cfgTofHigh;
@@ -691,25 +763,54 @@ void handleSave() {
     else if (t == 2) newSensorType = SENSOR_IR_BREAK;
     else newSensorType = SENSOR_DIGITAL;
   }
-  if (server.hasArg("tof_low"))  newTofLow  = server.arg("tof_low").toInt();
-  if (server.hasArg("tof_half")) newTofHalf = server.arg("tof_half").toInt();
-  if (server.hasArg("tof_high")) newTofHigh = server.arg("tof_high").toInt();
+  if (server.hasArg("units")) {
+    int u = server.arg("units").toInt();
+    newUnits = (u == 1) ? UNITS_IMPERIAL : UNITS_METRIC;
+  }
+
+  // Apply the new units setting to the global *temporarily* so parseDistanceInput()
+  // reads the request's intended unit. We restore on parse failure to preserve the
+  // staged-write invariant (no global mutation until validation passes).
+  Units savedUnits = cfgUnits;
+  cfgUnits = newUnits;
+  bool parseOk = true;
+  if (server.hasArg("tof_low")  && !parseDistanceInput(server.arg("tof_low"),  newTofLow))  parseOk = false;
+  if (server.hasArg("tof_half") && !parseDistanceInput(server.arg("tof_half"), newTofHalf)) parseOk = false;
+  if (server.hasArg("tof_high") && !parseDistanceInput(server.arg("tof_high"), newTofHigh)) parseOk = false;
+  cfgUnits = savedUnits;
+
+  if (!parseOk) {
+    sendValidationError("Each ToF threshold must be a positive number.");
+    return;
+  }
 
   if (newSensorType == SENSOR_TOF) {
     if (newTofHigh < TOF_MIN_MM || newTofHigh > TOF_MAX_MM ||
         newTofHalf < TOF_MIN_MM || newTofHalf > TOF_MAX_MM ||
         newTofLow  < TOF_MIN_MM || newTofLow  > TOF_MAX_MM) {
-      sendValidationError("Each ToF threshold must be between " + String(TOF_MIN_MM) + " and " + String(TOF_MAX_MM) + " mm.");
+      char minIn[8], maxIn[8];
+      snprintf(minIn, sizeof(minIn), "%.2f", TOF_MIN_MM / 25.4f);
+      snprintf(maxIn, sizeof(maxIn), "%.2f", TOF_MAX_MM / 25.4f);
+      sendValidationError("Each ToF threshold must be between " + String(TOF_MIN_MM) + " mm (" + String(minIn) + " in) and " + String(TOF_MAX_MM) + " mm (" + String(maxIn) + " in).");
       return;
     }
     if (!(newTofHigh < newTofHalf && newTofHalf < newTofLow)) {
-      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller mm = fuller tank). Got HIGH=" + String(newTofHigh) + " HALF=" + String(newTofHalf) + " LOW=" + String(newTofLow) + ".");
+      const char* u = unitsLabel(newUnits);
+      // formatDistance reads cfgUnits, so render against newUnits via temporary swap.
+      Units savedUnits2 = cfgUnits;
+      cfgUnits = newUnits;
+      String hi = formatDistance(newTofHigh);
+      String hf = formatDistance(newTofHalf);
+      String lo = formatDistance(newTofLow);
+      cfgUnits = savedUnits2;
+      sendValidationError("ToF thresholds must satisfy HIGH &lt; HALF &lt; LOW (smaller value = fuller tank). Got HIGH=" + hi + " " + u + " HALF=" + hf + " " + u + " LOW=" + lo + " " + u + ".");
       return;
     }
   }
 
   // Validation passed — commit to globals
   cfgSensorType = newSensorType;
+  cfgUnits      = newUnits;
   cfgTofLow  = newTofLow;
   cfgTofHalf = newTofHalf;
   cfgTofHigh = newTofHigh;
@@ -757,6 +858,9 @@ void handleStatus() {
   json += "\"ssid\":\"" + cfgSSID + "\",";
   json += "\"uptime_sec\":" + String(millis() / 1000) + ",";
   json += "\"firmware\":\"" + String(FW_VERSION) + "\",";
+  json += "\"units\":\"";
+  json += (cfgUnits == UNITS_IMPERIAL) ? "imperial" : "metric";
+  json += "\",";
   json += "\"sensor_type\":\"";
   json += sensorTypeJsonName(cfgSensorType);
   json += "\",";
@@ -1149,9 +1253,15 @@ void setup() {
   checkResetButton();
 
   loadSettings();
-  Serial.printf("Sensor type: %s | ToF thresholds (mm): low=%u half=%u high=%u\n",
+  String tlow  = formatDistance(cfgTofLow);
+  String thalf = formatDistance(cfgTofHalf);
+  String thigh = formatDistance(cfgTofHigh);
+  const char* u = unitsLabel(cfgUnits);
+  Serial.printf("Sensor type: %s | ToF thresholds: low=%s %s half=%s %s high=%s %s\n",
                 sensorTypeBootName(cfgSensorType),
-                cfgTofLow, cfgTofHalf, cfgTofHigh);
+                tlow.c_str(),  u,
+                thalf.c_str(), u,
+                thigh.c_str(), u);
 
   if (!configured) {
     Serial.println("No configuration found — starting AP mode.");
@@ -1177,7 +1287,7 @@ void setup() {
       msg += sensorTypeDisplayName(cfgSensorType);
       msg += "\nLevel: " + String(levelStateName(currentState));
       if (cfgSensorType == SENSOR_TOF && r.valid) {
-        msg += " (" + String(r.distanceMm) + "mm)";
+        msg += " (" + formatDistance(r.distanceMm) + " " + unitsLabel(cfgUnits) + ")";
       }
       msg += "\nSettings: http://" + WiFi.localIP().toString();
       sendTelegram(msg);
