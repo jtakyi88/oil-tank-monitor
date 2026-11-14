@@ -27,7 +27,7 @@ ESP32 + XKC-Y25-V non-contact liquid level sensor that sends Telegram alerts whe
 |-----------|---------|-------|
 | ESP32 Dev Board | ESP-WROOM-32 with CP210x USB | [$9.99 (1-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Development-Microcontroller-Integrated/dp/B0718T232Z) or [$17.99 (3-pack)](https://www.amazon.com/HiLetgo-ESP-WROOM-32-Bluetooth-ESP32-DevKitC-32-Development/dp/B0CNYK7WT2) |
 | XKC-Y25-V Sensor | Non-contact capacitive liquid level sensor | [$8.34 (1-pack)](https://www.amazon.com/caralin-XKC-Y25-V-Non-Contact-Liquid-Induction/dp/B0FT2CG9B2) or [$15.99 (4-pack)](https://www.amazon.com/DEVMO-Non-Contact-Induction-Detector-XKC-Y25-V/dp/B07TB3KZX7) |
-| ToF Module (VL53L1X) | Time-of-Flight distance sensor (for dry mechanical float gauges) | [~$3-5](https://www.adafruit.com/product/3317) |
+| ToF Module (VL53L1X) | Time-of-Flight distance sensor (for dry mechanical float gauges) | ~$3-5 for a generic TOF400C breakout, or the [Adafruit VL53L1X](https://www.adafruit.com/product/3967) with plug-in STEMMA QT sockets |
 | Jumper Wires | Female-to-female Dupont jumpers (or solder direct) | [$6.98](https://www.amazon.com/EDGELEC-Breadboard-Optional-Assorted-Multicolored/dp/B07GD2BWPY) |
 | USB Power Adapter | Any 5V/1A USB adapter | ~$5 |
 | USB Cable | Micro-USB **data** cable (not charge-only) | ~$5 |
@@ -110,6 +110,28 @@ Mount the VL53L1X ToF sensor on top of the sight gauge looking down at the puck.
 ![Assembled ESP32 + XKC-Y25-V on USB power](images/Exposed_Working_Sensor_With_Power.jpg)
 
 A complete build: ESP32 powered over USB with the XKC-Y25-V sensor wired in. The sensor's red LED lights when liquid is detected.
+
+## Enclosure (no-solder build)
+
+![Gauge Cap and Hub installed on a tank](images/enclosure_installed.jpg)
+
+A two-piece printable enclosure for the ToF build lives in [`hardware/enclosure`](hardware/enclosure):
+
+- **Gauge Cap** clamps around the top of the float-gauge vial and holds the VL53L1X looking down at the puck. A slot in the collar keeps the gauge readable by eye.
+- **Hub** holds the ESP32 and sticks to the steel tank with three magnets.
+- One keyed 4-wire Qwiic / STEMMA QT cable joins them. Boards press onto pins and lids press on, so there is no soldering and no screws.
+
+| Exploded | Wiring |
+|----------|--------|
+| ![Exploded view](images/enclosure_exploded.jpg) | ![Wiring view](images/enclosure_wiring.jpg) |
+
+The model is built around a Feather-format ESP32 with a Qwiic socket (Adafruit ESP32 Feather V2). The firmware picks up that board's I2C pins and user button automatically; compile with:
+
+```bash
+arduino-cli compile --fqbn esp32:esp32:adafruit_feather_esp32_v2 OilTankMonitor
+```
+
+On the Feather V2, hold the user button (SW38) for 5 seconds to factory reset. See [`hardware/enclosure/README.md`](hardware/enclosure/README.md) for the parts list, print settings and what to measure first. This is a concept model that has not been test-printed yet.
 
 ## Setup
 
