@@ -116,8 +116,10 @@ bool parseDistanceInput(const String& s, uint16_t& outMm) {
   return true;
 }
 
-const int I2C_SDA_PIN = 21;            // ESP32 default
-const int I2C_SCL_PIN = 22;            // ESP32 default
+// Use the board variant's own I2C pins: GPIO21/22 on a generic ESP32 DevKit,
+// GPIO22/20 (the STEMMA QT / Qwiic socket) on an Adafruit ESP32 Feather V2.
+const int I2C_SDA_PIN = SDA;
+const int I2C_SCL_PIN = SCL;
 const int TOF_HYSTERESIS_MM = 5;       // band around each threshold
 const int TOF_MIN_MM = 30;             // VL53L1X spec lower bound
 const int TOF_MAX_MM = 4000;           // VL53L1X long-mode upper bound
@@ -135,7 +137,11 @@ const IPAddress AP_GATEWAY(192, 168, 4, 1);
 const IPAddress AP_SUBNET(255, 255, 255, 0);
 
 // ===== FACTORY RESET BUTTON =====
+#if defined(ARDUINO_ADAFRUIT_FEATHER_ESP32_V2)
+const int RESET_BUTTON_PIN = BUTTON;      // Feather V2 user button (GPIO38, active LOW)
+#else
 const int RESET_BUTTON_PIN = 0;           // BOOT button (GPIO0)
+#endif
 const unsigned long RESET_HOLD_MS = 5000; // Hold 5 seconds to factory reset
 
 // ===== SENSOR CONFIG =====
@@ -1054,7 +1060,8 @@ bool initSensor() {
   }
   // ToF path — VL53L1X
   if (!initTof()) {
-    Serial.println("Sensor: TOF init FAILED — VL53L1X did not respond on I2C (SDA=21, SCL=22, VCC=3V3, GND=GND)");
+    Serial.println("Sensor: TOF init FAILED — VL53L1X did not respond on I2C (SDA=" + String(I2C_SDA_PIN)
+                   + ", SCL=" + String(I2C_SCL_PIN) + ", VCC=3V3, GND=GND)");
     return false;
   }
   return true;
